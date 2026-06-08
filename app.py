@@ -193,7 +193,7 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, min_reversal: fl
     _render_summary_metrics(st, filtered_df, scored, ranked)
     _render_price_chart(st, go, filtered_df, ranked)
     _render_score_table(st, ranked)
-    _render_wave_detail(st, px, ranked)
+    _render_wave_detail(st, go, ranked)
     _render_wave_compare(st, px, filtered_df, scored)
     _render_interval_continuity(st, px, data_dir, group, symbol_files)
 
@@ -241,14 +241,12 @@ def _render_price_chart(st, go, df: pd.DataFrame, waves: pd.DataFrame) -> None:
             x1=wave["end_date"],
             fillcolor=color,
             line_width=0,
-            annotation_text=f"{wave['level']} {wave['total_score']:.0f}",
-            annotation_position="top left",
         )
     fig.update_layout(
         template="plotly_white",
         height=420,
         margin={"l": 20, "r": 20, "t": 44, "b": 20},
-        title="收盘价与波段标注",
+        title="收盘价与波段区间",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
         font={"color": "#172033"},
@@ -284,7 +282,7 @@ def _render_score_table(st, waves: pd.DataFrame) -> None:
     st.dataframe(display[columns], use_container_width=True, hide_index=True)
 
 
-def _render_wave_detail(st, px, waves: pd.DataFrame) -> None:
+def _render_wave_detail(st, go, waves: pd.DataFrame) -> None:
     st.subheader("单个波段详情")
     if waves.empty:
         return
@@ -292,26 +290,12 @@ def _render_wave_detail(st, px, waves: pd.DataFrame) -> None:
     selected = st.selectbox("选择波段", labels)
     wave_index = int(selected.split(" | ", 1)[0])
     wave = waves.loc[wave_index]
-    dims = pd.DataFrame(
-        {
-            "维度": ["强度", "持续", "斜率", "回撤控制", "稳定性", "量能"],
-            "得分": [
-                wave["strength_score"],
-                wave["duration_score"],
-                wave["slope_score"],
-                wave["drawdown_score"],
-                wave["stability_score"],
-                wave["volume_score"],
-            ],
-        }
-    )
     left, right = st.columns([1, 2])
     left.metric("总分", f"{wave['total_score']:.1f}")
     left.metric("历史分位", f"{wave['historical_percentile']:.1f}%")
     left.metric("涨跌点数", f"{wave['points']:.2f}")
     left.metric("持续天数", int(wave["days"]))
-    fig = px.bar(dims, x="维度", y="得分", range_y=[0, 100], title="维度拆解", color="维度")
-    fig.update_layout(template="plotly_white", showlegend=False, height=330, margin={"l": 20, "r": 20, "t": 48, "b": 20})
+    fig = _wave_radar_chart(go, wave)
     right.plotly_chart(fig, use_container_width=True)
 
 
@@ -446,6 +430,63 @@ def _format_dates(df: pd.DataFrame) -> pd.DataFrame:
         if column in display:
             display[column] = pd.to_datetime(display[column]).dt.strftime("%Y-%m-%d")
     return display
+
+
+def _wave_radar_chart(go, wave: pd.Series):
+    labels = ["强度", "斜率", "稳定性", "量能", "持续时间", "回撤控制"]
+    values = [
+        float(wave["strength_score"]),
+        float(wave["slope_score"]),
+        float(wave["stability_score"]),
+        float(wave["volume_score"]),
+        float(wave["duration_score"]),
+        float(wave["drawdown_score"]),
+    ]
+    closed_labels = [*labels, labels[0]]
+    closed_values = [*values, values[0]]
+    start = pd.Timestamp(wave["start_date"]).strftime("%Y%m%d")
+    end = pd.Timestamp(wave["end_date"]).strftime("%Y%m%d")
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatterpolar(
+            r=closed_values,
+            theta=closed_labels,
+            mode="lines+markers",
+            fill="toself",
+            name="维度得分",
+            line={"color": "#0f766e", "width": 3},
+            marker={"size": 7, "color": "#0f766e"},
+            fillcolor="rgba(15, 118, 110, 0.26)",
+            hovertemplate="%{theta}: %{r:.1f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        template="plotly_white",
+        title=f"趋势评分: {float(wave['total_score']):.1f}分 ({start}-{end})",
+        height=390,
+        showlegend=False,
+        margin={"l": 38, "r": 38, "t": 62, "b": 28},
+        paper_bgcolor="#ffffff",
+        font={"color": "#172033", "size": 13},
+        polar={
+            "bgcolor": "#ffffff",
+            "radialaxis": {
+                "visible": True,
+                "range": [0, 100],
+                "tickvals": [0, 20, 40, 60, 80, 100],
+                "tickfont": {"color": "#667085", "size": 11},
+                "gridcolor": "#d9e0ea",
+                "linecolor": "#d9e0ea",
+            },
+            "angularaxis": {
+                "tickfont": {"color": "#475467", "size": 13},
+                "gridcolor": "#d9e0ea",
+                "linecolor": "#98a2b3",
+            },
+        },
+    )
+    return fig
 
 
 def _wave_label(index: int, wave: pd.Series) -> str:
