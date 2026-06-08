@@ -1,0 +1,15 @@
+[project]
+name = "trend-score"
+version = "0.1.0"
+description = "Historical wave trend detection and continuity scoring dashboard."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "plotly>=5.0",
+    "streamlit>=1.30",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]

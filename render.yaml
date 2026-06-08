@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: continuity-trend-score
+    env: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /

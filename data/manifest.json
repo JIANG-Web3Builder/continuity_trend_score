@@ -1,0 +1,162 @@
+{
+  "asset_groups": {
+    "index": "指数",
+    "sector": "板块",
+    "commodity": "商品"
+  },
+  "assets": [
+    {
+      "group": "index",
+      "ts_code": "000001.SH",
+      "name": "上证指数",
+      "source": "index_daily",
+      "exchange": null,
+      "idx_type": null,
+      "note": ""
+    },
+    {
+      "group": "index",
+      "ts_code": "000300.SH",
+      "name": "沪深300",
+      "source": "index_daily",
+      "exchange": null,
+      "idx_type": null,
+      "note": ""
+    },
+    {
+      "group": "index",
+      "ts_code": "000688.SH",
+      "name": "科创50",
+      "source": "index_daily",
+      "exchange": null,
+      "idx_type": null,
+      "note": ""
+    },
+    {
+      "group": "index",
+      "ts_code": "000852.SH",
+      "name": "中证1000",
+      "source": "index_daily",
+      "exchange": null,
+      "idx_type": null,
+      "note": ""
+    },
+    {
+      "group": "index",
+      "ts_code": "399006.SZ",
+      "name": "创业板指",
+      "source": "index_daily",
+      "exchange": null,
+      "idx_type": null,
+      "note": ""
+    },
+    {
+      "group": "sector",
+      "ts_code": "BK1128.DC",
+      "name": "CPO概念",
+      "source": "dc_daily",
+      "exchange": null,
+      "idx_type": "概念板块",
+      "note": "东方财富概念板块"
+    },
+    {
+      "group": "sector",
+      "ts_code": "BK1202.DC",
+      "name": "房地产",
+      "source": "dc_daily",
+      "exchange": null,
+      "idx_type": "行业板块",
+      "note": "东方财富行业板块"
+    },
+    {
+      "group": "sector",
+      "ts_code": "BK1216.DC",
+      "name": "医药生物",
+      "source": "dc_daily",
+      "exchange": null,
+      "idx_type": "行业板块",
+      "note": "东方财富行业板块"
+    },
+    {
+      "group": "sector",
+      "ts_code": "BK0438.DC",
+      "name": "食品饮料",
+      "source": "dc_daily",
+      "exchange": null,
+      "idx_type": "行业板块",
+      "note": "东方财富行业板块"
+    },
+    {
+      "group": "sector",
+      "ts_code": "BK0900.DC",
+      "name": "新能源车",
+      "source": "dc_daily",
+      "exchange": null,
+      "idx_type": "概念板块",
+      "note": "东方财富概念板块"
+    },
+    {
+      "group": "sector",
+      "ts_code": "BK1203.DC",
+      "name": "非银金融",
+      "source": "dc_daily",
+      "exchange": null,
+      "idx_type": "行业板块",
+      "note": "东方财富行业板块"
+    },
+    {
+      "group": "sector",
+      "ts_code": "BK0737.DC",
+      "name": "软件开发",
+      "source": "dc_daily",
+      "exchange": null,
+      "idx_type": "行业板块",
+      "note": "东方财富行业板块"
+    },
+    {
+      "group": "sector",
+      "ts_code": "BK1215.DC",
+      "name": "通信",
+      "source": "dc_daily",
+      "exchange": null,
+      "idx_type": "行业板块",
+      "note": "东方财富行业板块"
+    },
+    {
+      "group": "commodity",
+      "ts_code": "RBL.SHF",
+      "name": "螺纹钢连续",
+      "source": "fut_daily",
+      "exchange": "SHFE",
+      "idx_type": null,
+      "note": ""
+    },
+    {
+      "group": "commodity",
+      "ts_code": "SCL.INE",
+      "name": "原油连续",
+      "source": "fut_daily",
+      "exchange": "INE",
+      "idx_type": null,
+      "note": ""
+    },
+    {
+      "group": "commodity",
+      "ts_code": "AUL.SHF",
+      "name": "黄金连续",
+      "source": "fut_daily",
+      "exchange": "SHFE",
+      "idx_type": null,
+      "note": ""
+    },
+    {
+      "group": "commodity",
+      "ts_code": "AGL.SHF",
+      "name": "白银连续",
+      "source": "fut_daily",
+      "exchange": "SHFE",
+      "idx_type": null,
+      "note": ""
+    }
+  ]
+}

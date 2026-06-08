@@ -1,0 +1,142 @@
+import pandas as pd
+
+from trend_score.compare import compare_two_waves, rank_waves, relative_path
+from trend_score.scoring import score_waves
+
+
+def make_frame(symbol, closes, vols=None):
+    dates = pd.date_range("2024-01-01", periods=len(closes), freq="D")
+    vols = vols or [1000 + i * 20 for i in range(len(closes))]
+    return pd.DataFrame(
+        {
+            "ts_code": symbol,
+            "trade_date": dates,
+            "open": closes,
+            "high": [c + 1 for c in closes],
+            "low": [c - 1 for c in closes],
+            "close": closes,
+            "pre_close": closes,
+            "change": 0.0,
+            "pct_chg": 0.0,
+            "vol": vols,
+            "amount": [v * c for v, c in zip(vols, closes)],
+        }
+    )
+
+
+def test_score_waves_rewards_low_drawdown_more_than_choppy_path():
+    steady = make_frame("000001.SH", [100, 105, 110, 115, 120])
+    choppy = make_frame("000001.SH", [100, 115, 104, 121, 120])
+    prices = pd.concat([steady, choppy.assign(trade_date=lambda d: d["trade_date"] + pd.Timedelta(days=10))])
+    waves = pd.DataFrame(
+        [
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": steady.loc[0, "trade_date"],
+                "end_date": steady.loc[4, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 120.0,
+                "points": 20.0,
+                "pct_change": 20.0,
+                "days": 5,
+                "level": "大",
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": choppy.loc[0, "trade_date"] + pd.Timedelta(days=10),
+                "end_date": choppy.loc[4, "trade_date"] + pd.Timedelta(days=10),
+                "start_price": 100.0,
+                "end_price": 120.0,
+                "points": 20.0,
+                "pct_change": 20.0,
+                "days": 5,
+                "level": "大",
+            },
+        ]
+    )
+
+    scored = score_waves(prices, waves)
+
+    assert scored.loc[0, "drawdown_score"] > scored.loc[1, "drawdown_score"]
+    assert scored.loc[0, "total_score"] > scored.loc[1, "total_score"]
+    assert {
+        "strength_score",
+        "duration_score",
+        "slope_score",
+        "drawdown_score",
+        "stability_score",
+        "volume_score",
+        "total_score",
+        "historical_percentile",
+    }.issubset(scored.columns)
+
+
+def test_rank_waves_filters_by_direction_and_level():
+    scored = pd.DataFrame(
+        {
+            "symbol": ["A", "A", "A"],
+            "direction": ["up", "up", "down"],
+            "level": ["大", "小", "大"],
+            "total_score": [80, 90, 70],
+        }
+    )
+
+    ranked = rank_waves(scored, direction="up", level="大")
+
+    assert ranked["total_score"].tolist() == [80]
+
+
+def test_relative_path_normalizes_wave_prices_to_start_at_100():
+    prices = make_frame("000001.SH", [100, 110, 121])
+    wave = {
+        "symbol": "000001.SH",
+        "start_date": prices.loc[0, "trade_date"],
+        "end_date": prices.loc[2, "trade_date"],
+    }
+
+    path = relative_path(prices, wave, label="wave_a")
+
+    assert path["wave"].unique().tolist() == ["wave_a"]
+    assert path["relative_close"].round(2).tolist() == [100.0, 110.0, 121.0]
+
+
+def test_compare_two_waves_returns_metrics_and_normalized_paths():
+    prices = make_frame("000001.SH", [100, 105, 110, 120, 118, 125])
+    waves = pd.DataFrame(
+        [
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[0, "trade_date"],
+                "end_date": prices.loc[2, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 110.0,
+                "points": 10.0,
+                "pct_change": 10.0,
+                "days": 3,
+                "level": "中",
+                "total_score": 75.0,
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[3, "trade_date"],
+                "end_date": prices.loc[5, "trade_date"],
+                "start_price": 120.0,
+                "end_price": 125.0,
+                "points": 5.0,
+                "pct_change": 4.17,
+                "days": 3,
+                "level": "小",
+                "total_score": 65.0,
+            },
+        ]
+    )
+
+    result = compare_two_waves(prices, waves, 0, 1)
+
+    assert set(result.keys()) == {"metrics", "paths"}
+    assert result["metrics"]["label"].tolist() == ["wave_0", "wave_1"]
+    assert result["paths"]["wave"].nunique() == 2
