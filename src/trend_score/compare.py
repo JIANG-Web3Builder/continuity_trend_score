@@ -31,14 +31,15 @@ def relative_path(prices: pd.DataFrame, wave: pd.Series | dict, label: str) -> p
 
 
 def compare_two_waves(prices: pd.DataFrame, scored_waves: pd.DataFrame, first_index: int, second_index: int) -> dict[str, pd.DataFrame]:
-    first = scored_waves.loc[first_index]
-    second = scored_waves.loc[second_index]
-    metrics = pd.DataFrame([_metric_row(first, "wave_0"), _metric_row(second, "wave_1")])
+    return compare_waves(prices, scored_waves, [first_index, second_index])
+
+
+def compare_waves(prices: pd.DataFrame, scored_waves: pd.DataFrame, indices: list[int]) -> dict[str, pd.DataFrame]:
+    selected = [scored_waves.loc[index] for index in indices]
+    labels = [f"wave_{position}" for position in range(len(selected))]
+    metrics = pd.DataFrame([_metric_row(wave, label) for wave, label in zip(selected, labels)])
     paths = pd.concat(
-        [
-            relative_path(prices, first, "wave_0"),
-            relative_path(prices, second, "wave_1"),
-        ],
+        [relative_path(prices, wave, label) for wave, label in zip(selected, labels)],
         ignore_index=True,
     )
     return {"metrics": metrics, "paths": paths}

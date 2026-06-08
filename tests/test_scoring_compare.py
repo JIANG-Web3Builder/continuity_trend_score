@@ -1,6 +1,6 @@
 import pandas as pd
 
-from trend_score.compare import compare_two_waves, rank_waves, relative_path
+from trend_score.compare import compare_two_waves, compare_waves, rank_waves, relative_path
 from trend_score.scoring import score_waves
 
 
@@ -140,3 +140,55 @@ def test_compare_two_waves_returns_metrics_and_normalized_paths():
     assert set(result.keys()) == {"metrics", "paths"}
     assert result["metrics"]["label"].tolist() == ["wave_0", "wave_1"]
     assert result["paths"]["wave"].nunique() == 2
+
+
+def test_compare_waves_supports_more_than_two_waves():
+    prices = make_frame("000001.SH", [100, 105, 110, 108, 101, 96, 98, 104, 111])
+    waves = pd.DataFrame(
+        [
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[0, "trade_date"],
+                "end_date": prices.loc[2, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 110.0,
+                "points": 10.0,
+                "pct_change": 10.0,
+                "days": 3,
+                "level": "大",
+                "total_score": 78.0,
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "down",
+                "start_date": prices.loc[3, "trade_date"],
+                "end_date": prices.loc[5, "trade_date"],
+                "start_price": 108.0,
+                "end_price": 96.0,
+                "points": 12.0,
+                "pct_change": -11.11,
+                "days": 3,
+                "level": "大",
+                "total_score": 81.0,
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[6, "trade_date"],
+                "end_date": prices.loc[8, "trade_date"],
+                "start_price": 98.0,
+                "end_price": 111.0,
+                "points": 13.0,
+                "pct_change": 13.27,
+                "days": 3,
+                "level": "超大",
+                "total_score": 85.0,
+            },
+        ]
+    )
+
+    result = compare_waves(prices, waves, [0, 1, 2])
+
+    assert result["metrics"]["label"].tolist() == ["wave_0", "wave_1", "wave_2"]
+    assert result["paths"]["wave"].nunique() == 3
