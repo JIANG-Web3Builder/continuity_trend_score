@@ -37,7 +37,18 @@ def test_interval_continuity_ranks_cleaner_stronger_move_first():
     assert list(result["symbol"]) == ["AAA", "BBB"]
     assert result.loc[0, "direction"] == "up"
     assert result.loc[0, "interval_score"] > result.loc[1, "interval_score"]
-    assert {"strength_score", "slope_score", "drawdown_score", "stability_score", "volume_score"}.issubset(result.columns)
+    assert {
+        "strength_score",
+        "slope_score",
+        "drawdown_score",
+        "stability_score",
+        "volume_score",
+        "consistency_score",
+        "trend_day_ratio",
+        "adverse_day_ratio",
+    }.issubset(result.columns)
+    assert result.loc[0, "trend_day_ratio"] == 1.0
+    assert result.loc[0, "consistency_score"] == 100.0
 
 
 def test_interval_continuity_handles_single_symbol_short_interval():

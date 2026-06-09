@@ -12,6 +12,7 @@ def detect_waves(
     symbol: str | None = None,
     min_reversal: float | None = None,
     atr_multiplier: float = 1.2,
+    min_wave_days: int = 3,
 ) -> pd.DataFrame:
     """Detect directional waves from local reversals in close prices."""
     if prices.empty:
@@ -22,7 +23,7 @@ def detect_waves(
     threshold = float(min_reversal) if min_reversal is not None else _adaptive_reversal_threshold(df, atr_multiplier)
     threshold = max(threshold, 0.0)
 
-    pivots = _zigzag_pivots(df["close"].astype(float).to_numpy(), threshold)
+    pivots = _zigzag_pivots(df["close"].astype(float).to_numpy(), threshold, min_wave_days=min_wave_days)
     if len(pivots) < 2:
         return _empty_waves()
 
@@ -73,10 +74,11 @@ def classify_wave_levels(waves: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _zigzag_pivots(prices: np.ndarray, threshold: float) -> list[int]:
+def _zigzag_pivots(prices: np.ndarray, threshold: float, min_wave_days: int = 1) -> list[int]:
     if len(prices) < 2:
         return [0]
 
+    min_wave_days = max(int(min_wave_days), 1)
     pivot_idx = 0
     pivot_price = float(prices[0])
     extreme_idx = 0
@@ -108,23 +110,23 @@ def _zigzag_pivots(prices: np.ndarray, threshold: float) -> list[int]:
                 extreme_idx = idx
                 extreme_price = price
             elif extreme_price - price >= threshold:
-                if pivots[-1] != extreme_idx:
+                if pivots[-1] != extreme_idx and _has_min_wave_days(pivots[-1], extreme_idx, min_wave_days):
                     pivots.append(extreme_idx)
-                trend = "down"
-                extreme_idx = idx
-                extreme_price = price
+                    trend = "down"
+                    extreme_idx = idx
+                    extreme_price = price
         else:
             if price < extreme_price:
                 extreme_idx = idx
                 extreme_price = price
             elif price - extreme_price >= threshold:
-                if pivots[-1] != extreme_idx:
+                if pivots[-1] != extreme_idx and _has_min_wave_days(pivots[-1], extreme_idx, min_wave_days):
                     pivots.append(extreme_idx)
-                trend = "up"
-                extreme_idx = idx
-                extreme_price = price
+                    trend = "up"
+                    extreme_idx = idx
+                    extreme_price = price
 
-    if trend is not None and pivots[-1] != extreme_idx:
+    if trend is not None and pivots[-1] != extreme_idx and _has_min_wave_days(pivots[-1], extreme_idx, min_wave_days):
         pivots.append(extreme_idx)
     elif trend is None and pivot_idx != len(prices) - 1:
         pivots.append(len(prices) - 1)
@@ -134,6 +136,10 @@ def _zigzag_pivots(prices: np.ndarray, threshold: float) -> list[int]:
     return pivots
 
 
+def _has_min_wave_days(start_idx: int, end_idx: int, min_wave_days: int) -> bool:
+    return abs(end_idx - start_idx) + 1 >= min_wave_days
+
+
 def _adaptive_reversal_threshold(df: pd.DataFrame, atr_multiplier: float) -> float:
     high = df["high"].astype(float)
     low = df["low"].astype(float)
@@ -141,12 +147,17 @@ def _adaptive_reversal_threshold(df: pd.DataFrame, atr_multiplier: float) -> flo
     pre_close = df["pre_close"].astype(float).fillna(close.shift(1)).fillna(close)
     true_range = pd.concat([(high - low), (high - pre_close).abs(), (low - pre_close).abs()], axis=1).max(axis=1)
     atr = true_range.rolling(14, min_periods=3).mean().median()
-    if pd.notna(atr) and atr > 0:
-        return float(atr * atr_multiplier)
-
     daily_std = close.pct_change().std()
+    candidates = []
+    if pd.notna(atr) and atr > 0:
+        candidates.append(float(atr * atr_multiplier))
     if pd.notna(daily_std) and daily_std > 0:
-        return float(close.median() * daily_std * 2)
+        candidates.append(float(close.median() * daily_std * 2))
+    daily_abs_move = close.diff().abs().rolling(20, min_periods=5).median().median()
+    if pd.notna(daily_abs_move) and daily_abs_move > 0:
+        candidates.append(float(daily_abs_move * 3))
+    if candidates:
+        return max(candidates)
     return float(max(close.max() - close.min(), 0.0))
 
 

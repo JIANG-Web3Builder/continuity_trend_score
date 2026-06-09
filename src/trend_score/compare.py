@@ -64,6 +64,7 @@ def score_interval_continuity(prices: pd.DataFrame, start_date: str | pd.Timesta
         direction = "up" if signed_points >= 0 else "down"
         days = int(len(segment))
         adverse_pct = _interval_adverse_pct(segment, direction)
+        trend_day_ratio = _trend_day_ratio(segment, direction)
         move = max(abs(pct_change), 1.0)
         drawdown_score = max(0.0, 100.0 * (1.0 - min(adverse_pct / move, 1.0)))
         rows.append(
@@ -79,9 +80,12 @@ def score_interval_continuity(prices: pd.DataFrame, start_date: str | pd.Timesta
                 "days": days,
                 "slope": abs(pct_change) / max(days - 1, 1),
                 "max_adverse_pct": adverse_pct,
+                "trend_day_ratio": trend_day_ratio,
+                "adverse_day_ratio": round(1.0 - trend_day_ratio, 4),
                 "drawdown_score": round(drawdown_score, 2),
                 "stability_score": _interval_stability_score(segment),
                 "volume_score": _interval_volume_score(segment, direction),
+                "consistency_score": round(trend_day_ratio * 100.0, 2),
             }
         )
 
@@ -93,12 +97,13 @@ def score_interval_continuity(prices: pd.DataFrame, start_date: str | pd.Timesta
     result["slope_score"] = _rank_score(result["slope"])
     result["duration_score"] = _rank_score(result["days"])
     result["interval_score"] = (
-        result["strength_score"] * 0.20
-        + result["duration_score"] * 0.10
-        + result["slope_score"] * 0.20
-        + result["drawdown_score"] * 0.20
-        + result["stability_score"] * 0.20
+        result["strength_score"] * 0.18
+        + result["duration_score"] * 0.08
+        + result["slope_score"] * 0.17
+        + result["drawdown_score"] * 0.17
+        + result["stability_score"] * 0.15
         + result["volume_score"] * 0.10
+        + result["consistency_score"] * 0.15
     ).round(2)
     return result.sort_values("interval_score", ascending=False).reset_index(drop=True)
 
@@ -155,12 +160,28 @@ def _interval_stability_score(segment: pd.DataFrame) -> float:
     return round(max(0.0, min(1.0, 1.0 - residual_var / total_var)) * 100.0, 2)
 
 
+def _trend_day_ratio(segment: pd.DataFrame, direction: str) -> float:
+    changes = segment["close"].astype(float).diff().dropna()
+    if changes.empty:
+        return 0.5
+    non_zero = changes[changes != 0]
+    if non_zero.empty:
+        return 0.5
+    if direction == "up":
+        aligned = non_zero > 0
+    else:
+        aligned = non_zero < 0
+    return round(float(aligned.mean()), 4)
+
+
 def _interval_volume_score(segment: pd.DataFrame, direction: str) -> float:
     if len(segment) < 3 or "vol" not in segment:
         return 50.0
     volume = pd.to_numeric(segment["vol"], errors="coerce")
     closes = segment["close"].astype(float)
     directional_price = closes if direction == "up" else -closes
+    if volume.nunique(dropna=True) < 2 or directional_price.nunique(dropna=True) < 2:
+        return 50.0
     corr = directional_price.rank().corr(volume.rank())
     if pd.isna(corr):
         return 50.0
@@ -181,12 +202,15 @@ def _empty_interval_scores() -> pd.DataFrame:
             "days",
             "slope",
             "max_adverse_pct",
+            "trend_day_ratio",
+            "adverse_day_ratio",
             "strength_score",
             "duration_score",
             "slope_score",
             "drawdown_score",
             "stability_score",
             "volume_score",
+            "consistency_score",
             "interval_score",
         ]
     )

@@ -28,6 +28,15 @@ def build_wave_scores(df: pd.DataFrame, symbol: str, min_reversal: float | None 
     return score_waves(df, waves)
 
 
+def filter_scored_waves_by_date(scored: pd.DataFrame, date_range) -> pd.DataFrame:
+    """Filter already-scored waves to the selected display interval without recalculating ranks."""
+    if scored.empty or not isinstance(date_range, tuple) or len(date_range) != 2:
+        return scored.copy()
+    start_date, end_date = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1])
+    mask = (pd.to_datetime(scored["end_date"]) >= start_date) & (pd.to_datetime(scored["start_date"]) <= end_date)
+    return scored.loc[mask].reset_index(drop=True)
+
+
 def run_dashboard() -> None:
     try:
         import plotly.express as px
@@ -184,7 +193,8 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, min_reversal: fl
     sort_by = controls[3].selectbox("排序", ["total_score", "end_date", "points", "days"], key=f"{group}_sort")
 
     filtered_df = _filter_by_date(df, date_range)
-    scored = build_wave_scores(filtered_df, symbol, min_reversal=min_reversal)
+    full_scored = build_wave_scores(df, symbol, min_reversal=min_reversal)
+    scored = filter_scored_waves_by_date(full_scored, date_range)
     ranked = rank_waves(scored, direction=direction, level=level)
     if not ranked.empty:
         ascending = sort_by == "end_date"
@@ -194,7 +204,7 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, min_reversal: fl
     _render_price_chart(st, go, filtered_df, ranked)
     _render_score_table(st, ranked)
     _render_wave_detail(st, go, ranked)
-    _render_wave_compare(st, px, filtered_df, scored)
+    _render_wave_compare(st, px, df, scored)
     _render_interval_continuity(st, px, data_dir, group, symbol_files)
 
 

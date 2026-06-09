@@ -73,6 +73,56 @@ def test_score_waves_rewards_low_drawdown_more_than_choppy_path():
     }.issubset(scored.columns)
 
 
+def test_score_waves_percentile_scores_are_scoped_to_direction_and_level():
+    prices = make_frame("000001.SH", [100, 105, 110, 115, 120, 118, 112, 106, 102, 98])
+    waves = pd.DataFrame(
+        [
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[0, "trade_date"],
+                "end_date": prices.loc[2, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 110.0,
+                "points": 10.0,
+                "pct_change": 10.0,
+                "days": 3,
+                "level": "大",
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[0, "trade_date"],
+                "end_date": prices.loc[4, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 120.0,
+                "points": 20.0,
+                "pct_change": 20.0,
+                "days": 5,
+                "level": "大",
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "down",
+                "start_date": prices.loc[5, "trade_date"],
+                "end_date": prices.loc[9, "trade_date"],
+                "start_price": 118.0,
+                "end_price": 98.0,
+                "points": 20.0,
+                "pct_change": -16.95,
+                "days": 5,
+                "level": "小",
+            },
+        ]
+    )
+
+    scored = score_waves(prices, waves)
+
+    assert scored.loc[0, "strength_score"] == 50.0
+    assert scored.loc[1, "strength_score"] == 100.0
+    assert scored.loc[2, "strength_score"] == 100.0
+
+
 def test_rank_waves_filters_by_direction_and_level():
     scored = pd.DataFrame(
         {

@@ -35,9 +35,13 @@ def normalize_tushare_rows(asset: AssetSpec, rows: list[dict[str, Any]]) -> pd.D
     for column in ["open", "high", "low", "close"]:
         if column not in df:
             df[column] = pd.NA
-    fallback_price = df["close"] if "close" in df else df.get("settle")
-    for column in ["open", "high", "low"]:
-        df[column] = df[column].fillna(fallback_price)
+    fallback_price = pd.to_numeric(df["close"], errors="coerce")
+    if "settle" in df:
+        settle_price = pd.to_numeric(df["settle"], errors="coerce")
+        fallback_price = fallback_price.mask(fallback_price.isna(), settle_price)
+    for column in ["open", "high", "low", "close"]:
+        price = pd.to_numeric(df[column], errors="coerce")
+        df[column] = price.mask(price.isna(), fallback_price)
 
     if "pre_close" not in df:
         if "change" in df:

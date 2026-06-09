@@ -46,6 +46,16 @@ def test_detect_waves_handles_monotonic_series_as_one_wave():
     assert waves.loc[0, "points"] == 10.0
 
 
+def test_detect_waves_filters_one_day_noise_reversals_by_default():
+    df = price_frame([100, 110, 104, 116, 112])
+
+    waves = detect_waves(df, symbol="000001.SH", min_reversal=4)
+
+    assert waves[["direction", "start_price", "end_price", "days"]].to_dict("records") == [
+        {"direction": "up", "start_price": 100.0, "end_price": 116.0, "days": 4}
+    ]
+
+
 def test_classify_wave_levels_uses_symbol_specific_quantiles():
     waves = pd.DataFrame(
         {

@@ -37,9 +37,10 @@ def score_waves(prices: pd.DataFrame, waves: pd.DataFrame, weights: dict[str, fl
     result = waves.copy().reset_index(drop=True)
     segments = [_segment(prices, wave) for _, wave in result.iterrows()]
 
-    result["strength_score"] = _percentile_score(result["pct_change"].abs())
-    result["duration_score"] = _percentile_score(result["days"])
-    result["slope_score"] = _percentile_score(result["points"] / result["days"].clip(lower=1))
+    score_keys = ["symbol", "direction", "level"]
+    result["strength_score"] = _grouped_percentile_score(result, result["pct_change"].abs(), score_keys)
+    result["duration_score"] = _grouped_percentile_score(result, result["days"], score_keys)
+    result["slope_score"] = _grouped_percentile_score(result, result["points"] / result["days"].clip(lower=1), score_keys)
     result["drawdown_score"] = [_drawdown_score(segment, wave) for segment, (_, wave) in zip(segments, result.iterrows())]
     result["stability_score"] = [_stability_score(segment) for segment in segments]
     result["volume_score"] = [_volume_score(segment, wave) for segment, (_, wave) in zip(segments, result.iterrows())]
@@ -65,6 +66,13 @@ def _percentile_score(values: pd.Series) -> pd.Series:
     if len(numeric) == 1:
         return pd.Series([100.0], index=values.index)
     return (numeric.rank(pct=True, method="average") * 100).round(2)
+
+
+def _grouped_percentile_score(df: pd.DataFrame, values: pd.Series, keys: list[str]) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    scoped = df[keys].copy()
+    scoped["_value"] = numeric
+    return scoped.groupby(keys, dropna=False)["_value"].rank(pct=True, method="average").mul(100).round(2)
 
 
 def _group_percentile(df: pd.DataFrame, column: str) -> pd.Series:
@@ -107,6 +115,8 @@ def _volume_score(segment: pd.DataFrame, wave: pd.Series) -> float:
     volume = segment["vol"].astype(float)
     closes = segment["close"].astype(float)
     directional_price = closes if wave["direction"] == "up" else -closes
+    if volume.nunique(dropna=True) < 2 or directional_price.nunique(dropna=True) < 2:
+        return 50.0
     corr = directional_price.rank().corr(volume.rank())
     if pd.isna(corr):
         return 50.0
