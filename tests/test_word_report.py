@@ -44,6 +44,12 @@ def test_generate_word_report_creates_docx_and_chart_assets(tmp_path):
     assert len(document.tables) <= 4
     assert "研究背景与问题定义" in paragraphs
     assert "趋势评分的真实驱动因素" in paragraphs
+    assert "指数样本分析" in paragraphs
+    assert "板块样本分析" in paragraphs
+    assert "商品样本分析" in paragraphs
+    assert "指数样本分析\n覆盖" in paragraphs
+    assert "板块样本分析\n覆盖" in paragraphs
+    assert "商品样本分析\n覆盖" in paragraphs
     assert "附录" in paragraphs
     assert "鐮旂┒" not in paragraphs
 

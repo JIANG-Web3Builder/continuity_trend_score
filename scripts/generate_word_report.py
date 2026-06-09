@@ -30,6 +30,7 @@ REPORT_TITLE = "连续性系统—品种历史波段趋势识别与强度评分�
 DEFAULT_OUTPUT = ROOT_DIR / "reports" / "continuity_wave_research_report.docx"
 DEFAULT_CHART_DIR = ROOT_DIR / "reports" / "assets"
 RECENT_WINDOW_DAYS = 120
+GROUP_ORDER = ["index", "sector", "commodity"]
 
 
 def generate_report(
@@ -691,26 +692,80 @@ def _add_score_driver_analysis(document: Document, analysis: dict[str, Any], cha
 
 def _add_group_characteristics(document: Document, analysis: dict[str, Any], chart_paths: dict[str, Path]) -> None:
     group_summary = analysis["group_summary"]
+    assets = analysis["assets"]
     waves = analysis["wave_distribution"]
+    intervals = analysis["intervals"]
     document.add_heading("5. 不同资产组的趋势特征", level=1)
     _add_picture(document, chart_paths["group_distribution"])
     if group_summary.empty:
         document.add_paragraph("资产组统计为空，无法做结构差异比较。")
         return
 
-    for _, row in group_summary.iterrows():
-        group_waves = waves[waves["group_name"] == row["group_name"]] if not waves.empty else pd.DataFrame()
-        if group_waves.empty:
-            document.add_paragraph(f"{row['group_name']}：当前没有识别到足够波段。")
+    document.add_paragraph(
+        "三类资产不应混在一个总榜里解释。指数更像市场系统性趋势的底座，板块更像风险偏好和产业主题的放大器，商品则更受供需、汇率和连续合约结构影响。下面按指数、板块、商品分别展开。"
+    )
+    for group in GROUP_ORDER:
+        row = group_summary[group_summary["group"] == group]
+        if row.empty:
             continue
-        up_ratio = float((group_waves["direction"] == "up").mean() * 100)
-        median_score = float(group_waves["total_score"].median())
-        document.add_paragraph(
-            f"{row['group_name']}：覆盖 {int(row['symbols'])} 个品种，合计 {int(row['waves'])} 个波段，中位总收益 {row['total_return']:.1f}%，中位年化波动 {row['annual_volatility']:.1f}%。上涨波段占比 {up_ratio:.1f}%，波段评分中位数 {median_score:.1f}。"
-        )
+        group_name = ASSET_GROUPS[group]
+        group_assets = assets[assets["group"] == group] if not assets.empty else pd.DataFrame()
+        group_waves = waves[waves["group"] == group] if not waves.empty else pd.DataFrame()
+        group_intervals = intervals[intervals["group"] == group] if not intervals.empty else pd.DataFrame()
+        _add_asset_group_section(document, group, group_name, row.iloc[0], group_assets, group_waves, group_intervals)
     document.add_paragraph(
         "宽基指数通常更适合观察系统性趋势的连续性，板块与商品更容易出现强波段和尖锐反转。因此，跨资产比较时不能只看绝对点数，应更多依赖同品种分位、方向一致性和波动率归一化后的结果。"
     )
+
+
+def _add_asset_group_section(
+    document: Document,
+    group: str,
+    group_name: str,
+    summary: pd.Series,
+    assets: pd.DataFrame,
+    waves: pd.DataFrame,
+    intervals: pd.DataFrame,
+) -> None:
+    document.add_heading(f"{group_name}样本分析", level=2)
+    if waves.empty or assets.empty:
+        document.add_paragraph(f"覆盖 {int(summary['symbols'])} 个品种，但当前样本没有形成足够稳定的波段统计。")
+        return
+
+    up_ratio = float((waves["direction"] == "up").mean() * 100)
+    median_score = float(waves["total_score"].median())
+    median_days = float(waves["days"].median())
+    best_asset = assets.sort_values("top_score", ascending=False).iloc[0]
+    active_asset = assets.sort_values("waves_per_year", ascending=False).iloc[0]
+    driver_rows = _score_correlations(waves).head(2)
+    driver_text = "、".join(f"{row.feature_name}（{row.correlation:.2f}）" for row in driver_rows.itertuples()) if not driver_rows.empty else "样本不足"
+
+    document.add_paragraph(
+        f"覆盖 {int(summary['symbols'])} 个品种、{int(summary['rows']):,} 行日线数据，识别 {int(summary['waves'])} 个波段。该组中位总涨跌幅为 {summary['total_return']:.1f}%，中位年化波动为 {summary['annual_volatility']:.1f}%，自适应反转阈值折算比例中位数为 {summary['median_reversal_pct']:.2f}%。"
+    )
+    document.add_paragraph(
+        f"波段结构上，上涨波段占比 {up_ratio:.1f}%，波段持续天数中位数 {median_days:.1f} 天，评分中位数 {median_score:.1f}。最高质量样本来自 {best_asset['name']}，历史最高波段评分 {best_asset['top_score']:.1f}；年化波段最密集的是 {active_asset['name']}，约 {active_asset['waves_per_year']:.1f} 段/年。"
+    )
+    document.add_paragraph(
+        f"评分驱动上，该组内部最靠前的解释变量是 {driver_text}。这能帮助判断该资产组的高分来自顺滑推进、回撤控制，还是来自更强的单段涨跌幅。"
+    )
+
+    if not intervals.empty:
+        leader = intervals.sort_values("interval_score", ascending=False).iloc[0]
+        lagger = intervals.sort_values("interval_score", ascending=True).iloc[0]
+        document.add_paragraph(
+            f"当前约 {RECENT_WINDOW_DAYS} 个交易日区间内，组内连续性最强的是 {leader['name']}（{leader['direction_name']}，区间评分 {leader['interval_score']:.1f}，方向一致性 {leader['trend_day_ratio']:.2f}）；连续性较弱的是 {lagger['name']}（区间评分 {lagger['interval_score']:.1f}）。"
+        )
+
+    document.add_paragraph(_asset_group_interpretation(group))
+
+
+def _asset_group_interpretation(group: str) -> str:
+    if group == "index":
+        return "指数章节的重点是识别市场底层趋势是否连续。宽基指数波段通常不如主题板块猛烈，但更适合作为风险环境的基准：如果指数连续性偏弱，而板块或商品高分，说明机会可能更偏结构性而非全面趋势。"
+    if group == "sector":
+        return "板块章节的重点是观察主题扩散和风险偏好。板块更容易出现高强度波段，也更容易因为资金切换出现尖锐回撤，因此评分时尤其需要看回撤控制和方向一致性，不能只看区间涨幅。"
+    return "商品章节的重点是处理不同合约价格量级和波动结构。商品趋势有时更顺，但点数不可直接跨品种比较，因此百分比阈值、日波动倍数和同品种历史分位比绝对点数更重要。"
 
 
 def _add_current_interval_observation(document: Document, analysis: dict[str, Any], chart_paths: dict[str, Path]) -> None:
