@@ -57,6 +57,22 @@ def filter_scored_waves_by_date(scored: pd.DataFrame, date_range) -> pd.DataFram
     return scored.loc[mask].reset_index(drop=True)
 
 
+def extend_latest_wave_for_chart(waves: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
+    """Extend the last visible wave to the latest price date for chart shading only."""
+    if waves.empty or prices.empty or "end_date" not in waves or "trade_date" not in prices:
+        return waves.copy()
+
+    display = waves.copy()
+    latest_price_date = pd.to_datetime(prices["trade_date"]).max()
+    end_dates = pd.to_datetime(display["end_date"], errors="coerce")
+    if end_dates.isna().all() or latest_price_date <= end_dates.max():
+        return display
+
+    latest_wave_index = end_dates.idxmax()
+    display.loc[latest_wave_index, "end_date"] = latest_price_date
+    return display
+
+
 def run_dashboard() -> None:
     try:
         import plotly.express as px
@@ -267,6 +283,7 @@ def _render_missing_data_help(st, data_dir: Path, group: str) -> None:
 
 def _render_price_chart(st, go, df: pd.DataFrame, waves: pd.DataFrame) -> None:
     fig = go.Figure()
+    chart_waves = extend_latest_wave_for_chart(waves, df)
     fig.add_trace(
         go.Scatter(
             x=df["trade_date"],
@@ -276,7 +293,7 @@ def _render_price_chart(st, go, df: pd.DataFrame, waves: pd.DataFrame) -> None:
             line={"color": "#172033", "width": 1.8},
         )
     )
-    for _, wave in waves.iterrows():
+    for _, wave in chart_waves.iterrows():
         color = "rgba(15, 118, 110, 0.14)" if wave["direction"] == "up" else "rgba(180, 35, 24, 0.14)"
         fig.add_vrect(
             x0=wave["start_date"],

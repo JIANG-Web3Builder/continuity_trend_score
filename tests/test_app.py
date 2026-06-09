@@ -33,3 +33,25 @@ def test_resolve_reversal_threshold_modes():
     assert app.resolve_reversal_threshold("自动", 0).pct is None
     assert app.resolve_reversal_threshold("百分比", 3).pct == 3.0
     assert app.resolve_reversal_threshold("点数", 80).points == 80.0
+
+
+def test_extend_latest_wave_for_chart_reaches_latest_price_date():
+    app = importlib.import_module("app")
+    prices = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2024-01-01", "2024-01-10", "2024-01-20"]),
+            "close": [100.0, 120.0, 116.0],
+        }
+    )
+    waves = pd.DataFrame(
+        {
+            "direction": ["up", "down"],
+            "start_date": pd.to_datetime(["2024-01-01", "2023-12-01"]),
+            "end_date": pd.to_datetime(["2024-01-10", "2023-12-10"]),
+        }
+    )
+
+    display_waves = app.extend_latest_wave_for_chart(waves, prices)
+
+    assert display_waves.loc[0, "end_date"] == pd.Timestamp("2024-01-20")
+    assert waves.loc[0, "end_date"] == pd.Timestamp("2024-01-10")
