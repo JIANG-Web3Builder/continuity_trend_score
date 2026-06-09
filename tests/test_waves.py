@@ -56,6 +56,21 @@ def test_detect_waves_filters_one_day_noise_reversals_by_default():
     ]
 
 
+def test_detect_waves_supports_percentage_reversal_threshold():
+    low_price = price_frame([100, 110, 104, 116, 112])
+    high_price = price_frame([3000, 3300, 3120, 3480, 3360])
+
+    low_waves = detect_waves(low_price, symbol="LOW", min_reversal_pct=5)
+    high_waves = detect_waves(high_price, symbol="HIGH", min_reversal_pct=5)
+
+    assert low_waves[["direction", "start_price", "end_price"]].to_dict("records") == [
+        {"direction": "up", "start_price": 100.0, "end_price": 116.0}
+    ]
+    assert high_waves[["direction", "start_price", "end_price"]].to_dict("records") == [
+        {"direction": "up", "start_price": 3000.0, "end_price": 3480.0}
+    ]
+
+
 def test_classify_wave_levels_uses_symbol_specific_quantiles():
     waves = pd.DataFrame(
         {

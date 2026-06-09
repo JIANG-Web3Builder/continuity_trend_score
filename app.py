@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -23,8 +24,27 @@ LEVEL_OPTIONS = ["全部", "小", "中", "大", "超大"]
 GROUP_ORDER = ["index", "sector", "commodity"]
 
 
-def build_wave_scores(df: pd.DataFrame, symbol: str, min_reversal: float | None = None) -> pd.DataFrame:
-    waves = detect_waves(df, symbol=symbol, min_reversal=min_reversal)
+@dataclass(frozen=True)
+class ReversalThreshold:
+    points: float | None = None
+    pct: float | None = None
+
+
+def resolve_reversal_threshold(mode: str, value: float) -> ReversalThreshold:
+    if mode == "百分比":
+        return ReversalThreshold(pct=float(value) if value > 0 else None)
+    if mode == "点数":
+        return ReversalThreshold(points=float(value) if value > 0 else None)
+    return ReversalThreshold()
+
+
+def build_wave_scores(
+    df: pd.DataFrame,
+    symbol: str,
+    min_reversal: float | None = None,
+    min_reversal_pct: float | None = None,
+) -> pd.DataFrame:
+    waves = detect_waves(df, symbol=symbol, min_reversal=min_reversal, min_reversal_pct=min_reversal_pct)
     return score_waves(df, waves)
 
 
@@ -54,10 +74,17 @@ def run_dashboard() -> None:
     page_label_to_group = {ASSET_GROUPS[group]: group for group in GROUP_ORDER}
     group_label = st.sidebar.radio("页面", list(page_label_to_group), horizontal=True)
     group = page_label_to_group[group_label]
-    threshold = st.sidebar.number_input("最小反转点数（0=自适应）", min_value=0.0, value=0.0, step=10.0)
-    min_reversal = threshold if threshold > 0 else None
+    threshold_mode = st.sidebar.selectbox("反转阈值模式", ["自动", "百分比", "点数"])
+    if threshold_mode == "百分比":
+        threshold_value = st.sidebar.number_input("最小反转幅度（%）", min_value=0.0, value=3.0, step=0.5)
+    elif threshold_mode == "点数":
+        threshold_value = st.sidebar.number_input("最小反转点数", min_value=0.0, value=0.0, step=10.0)
+    else:
+        threshold_value = 0.0
+        st.sidebar.caption("自动模式会按 ATR、日波动和绝对波动估算阈值。")
+    reversal_threshold = resolve_reversal_threshold(threshold_mode, threshold_value)
 
-    _render_asset_group(st, px, go, data_dir, group, min_reversal)
+    _render_asset_group(st, px, go, data_dir, group, reversal_threshold)
 
 
 def _apply_theme(st) -> None:
@@ -154,7 +181,7 @@ def _apply_theme(st) -> None:
     )
 
 
-def _render_asset_group(st, px, go, data_dir: Path, group: str, min_reversal: float | None) -> None:
+def _render_asset_group(st, px, go, data_dir: Path, group: str, reversal_threshold: ReversalThreshold) -> None:
     st.header(ASSET_GROUPS[group])
     symbol_files = available_symbol_files(data_dir, group=group)
     if not symbol_files:
@@ -193,7 +220,12 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, min_reversal: fl
     sort_by = controls[3].selectbox("排序", ["total_score", "end_date", "points", "days"], key=f"{group}_sort")
 
     filtered_df = _filter_by_date(df, date_range)
-    full_scored = build_wave_scores(df, symbol, min_reversal=min_reversal)
+    full_scored = build_wave_scores(
+        df,
+        symbol,
+        min_reversal=reversal_threshold.points,
+        min_reversal_pct=reversal_threshold.pct,
+    )
     scored = filter_scored_waves_by_date(full_scored, date_range)
     ranked = rank_waves(scored, direction=direction, level=level)
     if not ranked.empty:

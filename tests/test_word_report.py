@@ -55,7 +55,13 @@ def test_collect_report_data_contains_research_analysis_layers(tmp_path):
 
     analysis = collect_report_data(tmp_path)
 
-    assert {"total_return", "annual_volatility", "waves_per_year"}.issubset(analysis["assets"].columns)
+    assert {
+        "total_return",
+        "annual_volatility",
+        "waves_per_year",
+        "min_reversal_pct",
+        "reversal_vol_multiple",
+    }.issubset(analysis["assets"].columns)
     assert {"feature", "correlation"}.issubset(analysis["score_correlations"].columns)
     assert {"case_type", "symbol", "total_score"}.issubset(analysis["typical_waves"].columns)
     assert not analysis["wave_distribution"].empty

@@ -24,3 +24,12 @@ def test_filter_scored_waves_by_date_preserves_precomputed_scores():
 
     assert filtered["historical_percentile"].tolist() == [75.0]
     assert filtered["total_score"].tolist() == [90.0]
+
+
+def test_resolve_reversal_threshold_modes():
+    app = importlib.import_module("app")
+
+    assert app.resolve_reversal_threshold("自动", 0).points is None
+    assert app.resolve_reversal_threshold("自动", 0).pct is None
+    assert app.resolve_reversal_threshold("百分比", 3).pct == 3.0
+    assert app.resolve_reversal_threshold("点数", 80).points == 80.0

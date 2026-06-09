@@ -124,9 +124,14 @@ def _asset_summary_row(
 ) -> dict[str, Any]:
     closes = prices["close"].astype(float)
     returns = closes.pct_change().dropna()
+    daily_abs_move = closes.diff().abs().dropna()
     years = max(len(prices) / 252.0, 1 / 252.0)
     total_return = (closes.iloc[-1] / closes.iloc[0] - 1.0) * 100.0 if closes.iloc[0] else 0.0
     annual_volatility = float(returns.std() * math.sqrt(252) * 100.0) if len(returns) > 1 else 0.0
+    median_close = float(closes.median()) if not closes.empty else 0.0
+    median_abs_move = float(daily_abs_move.median()) if not daily_abs_move.empty else 0.0
+    threshold_pct = float(threshold / median_close * 100.0) if median_close else 0.0
+    vol_multiple = float(threshold / median_abs_move) if median_abs_move else 0.0
 
     return {
         "group": group,
@@ -137,6 +142,8 @@ def _asset_summary_row(
         "start_date": prices["trade_date"].min().strftime("%Y-%m-%d"),
         "end_date": prices["trade_date"].max().strftime("%Y-%m-%d"),
         "min_reversal": round(float(threshold), 2),
+        "min_reversal_pct": round(float(threshold_pct), 2),
+        "reversal_vol_multiple": round(float(vol_multiple), 2),
         "waves": int(len(scored)),
         "up_waves": int((scored["direction"] == "up").sum()) if not scored.empty else 0,
         "down_waves": int((scored["direction"] == "down").sum()) if not scored.empty else 0,
@@ -238,6 +245,8 @@ def _group_summary(assets: pd.DataFrame) -> pd.DataFrame:
                 "rows",
                 "waves",
                 "median_reversal",
+                "median_reversal_pct",
+                "median_reversal_vol_multiple",
                 "avg_days",
                 "waves_per_year",
                 "annual_volatility",
@@ -252,6 +261,8 @@ def _group_summary(assets: pd.DataFrame) -> pd.DataFrame:
             rows=("rows", "sum"),
             waves=("waves", "sum"),
             median_reversal=("min_reversal", "median"),
+            median_reversal_pct=("min_reversal_pct", "median"),
+            median_reversal_vol_multiple=("reversal_vol_multiple", "median"),
             avg_days=("avg_days", "mean"),
             waves_per_year=("waves_per_year", "mean"),
             annual_volatility=("annual_volatility", "median"),
@@ -261,6 +272,8 @@ def _group_summary(assets: pd.DataFrame) -> pd.DataFrame:
         .round(
             {
                 "median_reversal": 2,
+                "median_reversal_pct": 2,
+                "median_reversal_vol_multiple": 2,
                 "avg_days": 1,
                 "waves_per_year": 2,
                 "annual_volatility": 2,
@@ -399,7 +412,7 @@ def _plot_threshold_sensitivity(assets: pd.DataFrame, output_path: Path) -> None
         colors = {"指数": "#2563eb", "板块": "#b7791f", "商品": "#0f766e"}
         for group_name, frame in assets.groupby("group_name"):
             ax.scatter(
-                frame["min_reversal"],
+                frame["min_reversal_pct"],
                 frame["waves"],
                 s=np.clip(frame["annual_volatility"].fillna(0) * 2.5, 45, 220),
                 alpha=0.78,
@@ -409,11 +422,11 @@ def _plot_threshold_sensitivity(assets: pd.DataFrame, output_path: Path) -> None
                 linewidth=0.7,
             )
             for _, row in frame.iterrows():
-                ax.annotate(str(row["name"]), (row["min_reversal"], row["waves"]), xytext=(4, 4), textcoords="offset points", fontsize=7)
-        ax.set_xlabel("自适应最小反转点数")
+                ax.annotate(str(row["name"]), (row["min_reversal_pct"], row["waves"]), xytext=(4, 4), textcoords="offset points", fontsize=7)
+        ax.set_xlabel("自适应反转阈值（折算为收盘价百分比）")
         ax.set_ylabel("历史波段数量")
         ax.legend(frameon=False, fontsize=8)
-    ax.set_title("阈值敏感性：反转点数与波段数量", fontsize=13, pad=12)
+    ax.set_title("阈值敏感性：百分比阈值与波段数量", fontsize=13, pad=12)
     _polish_axes(ax)
     fig.tight_layout()
     fig.savefig(output_path, bbox_inches="tight")
@@ -577,10 +590,12 @@ def _add_executive_summary(document: Document, analysis: dict[str, Any]) -> None
     )
     if not assets.empty:
         median_reversal = float(assets["min_reversal"].median())
+        median_reversal_pct = float(assets["min_reversal_pct"].median())
+        median_vol_multiple = float(assets["reversal_vol_multiple"].median())
         median_waves_per_year = float(assets["waves_per_year"].median())
         _add_bullet(
             document,
-            f"当前自适应最小反转阈值的中位数为 {median_reversal:.2f} 点，单品种年化识别波段数中位数约 {median_waves_per_year:.1f} 段；新增最小波段交易日过滤后，1-2 天噪声反转不再轻易进入主波段。",
+            f"当前自适应反转阈值的中位数为 {median_reversal:.2f} 点，折算为价格比例约 {median_reversal_pct:.2f}%，约等于 {median_vol_multiple:.1f} 倍中位日波动；单品种年化识别波段数中位数约 {median_waves_per_year:.1f} 段。",
         )
     if top_driver is not None:
         _add_bullet(
@@ -619,7 +634,7 @@ def _add_data_and_method(document: Document, analysis: dict[str, Any]) -> None:
         f"样本来自本地数据目录，覆盖 {groups} 三类资产，最早日期 {start_date}，最新日期 {end_date}。各品种统一使用 OHLCV 字段，先在全历史上识别并评分，再按展示日期筛选，避免历史分位随网页筛选窗口漂移。"
     )
     document.add_paragraph(
-        "最小反转点数采用“手动优先、自适应兜底”的规则：用户在网页中输入大于 0 的值时使用手动阈值；输入 0 时，脚本基于 ATR、日收益波动和绝对日波动共同估计阈值。这个口径的意义，是让不同价格量级的品种先各自完成波段切分，再进入同品种、同方向、同级别的相对评分。"
+        "反转阈值支持三种口径：自动模式按 ATR、日收益波动和绝对日波动估算；百分比模式按价格比例判断反转，更适合跨资产理解；点数模式保留给熟悉单一品种的人工精调。报告中同时展示点数、折算百分比和相对日波动倍数，避免不同价格量级的品种被点数误导。"
     )
 
 
@@ -631,14 +646,14 @@ def _add_wave_identification(document: Document, analysis: dict[str, Any], chart
         document.add_paragraph("由于没有可用资产统计，无法评价阈值敏感性。")
         return
 
-    corr = _safe_corr(assets["min_reversal"], assets["waves"])
+    corr = _safe_corr(assets["min_reversal_pct"], assets["waves"])
     high_freq = assets.sort_values("waves_per_year", ascending=False).head(1).iloc[0]
     smooth = assets.sort_values("waves_per_year", ascending=True).head(1).iloc[0]
     document.add_paragraph(
-        f"阈值与波段数量的相关系数为 {corr:.2f}。如果该值显著为负，说明阈值越高切分越少；如果接近 0，则更多由品种自身波动形态决定。当前年化波段最密集的是 {high_freq['name']}（{high_freq['waves_per_year']:.1f} 段/年），最平滑的是 {smooth['name']}（{smooth['waves_per_year']:.1f} 段/年）。"
+        f"折算百分比阈值与波段数量的相关系数为 {corr:.2f}。如果该值显著为负，说明阈值越高切分越少；如果接近 0，则更多由品种自身波动形态决定。当前年化波段最密集的是 {high_freq['name']}（{high_freq['waves_per_year']:.1f} 段/年），最平滑的是 {smooth['name']}（{smooth['waves_per_year']:.1f} 段/年）。"
     )
     document.add_paragraph(
-        "这个结果用于判断识别是否过度切分：如果某品种波段数量高、平均持续天数短、但总收益和波动并不高，就需要提高阈值或增加最小持续天数；反过来，如果长期只有少量波段，系统可能过度平滑，容易漏掉中级别趋势。"
+        "这个结果用于判断识别是否过度切分：如果某品种波段数量高、平均持续天数短、但总收益和波动并不高，就需要提高百分比阈值或增加最小持续天数；反过来，如果长期只有少量波段，系统可能过度平滑，容易漏掉中级别趋势。"
     )
 
 
@@ -726,7 +741,7 @@ def _add_current_interval_observation(document: Document, analysis: dict[str, An
 
 def _add_limits_and_roadmap(document: Document, analysis: dict[str, Any]) -> None:
     document.add_heading("7. 模型局限与优化路线", level=1)
-    _add_numbered(document, "阈值仍是系统最敏感的入口。下一步可以把最小反转点数从“点数口径”扩展到“波动率归一口径”，让指数、板块、商品之间更可比。")
+    _add_numbered(document, "阈值仍是系统最敏感的入口。本轮新增百分比口径后，下一步可以继续加入 ATR 倍数或历史波动分位，让指数、板块、商品之间更可比。")
     _add_numbered(document, "量能分数已经加入常量数据保护，但期货连续合约、指数和板块的成交量含义不同，后续应按资产组分别定义量能解释。")
     _add_numbered(document, "当前连续性用方向一致性和回撤度量近似表达，仍可加入连续阳线/阴线、回撤次数、反弹失败次数等更接近交易语言的结构指标。")
     _add_numbered(document, "历史分位已经稳定到全历史口径，但当前波段若尚未结束，仍存在“未完成样本”问题，适合在网页中增加当前波段置信度或未完成标记。")
@@ -751,6 +766,8 @@ def _add_appendix(document: Document, analysis: dict[str, Any]) -> None:
             "total_return",
             "annual_volatility",
             "min_reversal",
+            "min_reversal_pct",
+            "reversal_vol_multiple",
             "waves",
             "waves_per_year",
             "avg_days",
@@ -816,6 +833,8 @@ def _column_label(column: str) -> str:
         "rows": "数据行数",
         "waves": "波段数",
         "median_reversal": "中位反转点数",
+        "median_reversal_pct": "中位反转比例(%)",
+        "median_reversal_vol_multiple": "中位日波动倍数",
         "avg_days": "平均持续天数",
         "waves_per_year": "年化波段数",
         "annual_volatility": "年化波动率(%)",
@@ -826,6 +845,8 @@ def _column_label(column: str) -> str:
         "start_date": "开始日期",
         "end_date": "结束日期",
         "min_reversal": "最小反转点数",
+        "min_reversal_pct": "反转比例(%)",
+        "reversal_vol_multiple": "日波动倍数",
         "median_points": "中位波段点数",
         "max_points": "最大波段点数",
         "direction_name": "方向",

@@ -11,6 +11,7 @@ def detect_waves(
     prices: pd.DataFrame,
     symbol: str | None = None,
     min_reversal: float | None = None,
+    min_reversal_pct: float | None = None,
     atr_multiplier: float = 1.2,
     min_wave_days: int = 3,
 ) -> pd.DataFrame:
@@ -20,10 +21,17 @@ def detect_waves(
 
     df = prices.sort_values("trade_date").reset_index(drop=True).copy()
     symbol_value = symbol or str(df.loc[0, "ts_code"])
-    threshold = float(min_reversal) if min_reversal is not None else _adaptive_reversal_threshold(df, atr_multiplier)
-    threshold = max(threshold, 0.0)
+    threshold = None if min_reversal is None else max(float(min_reversal), 0.0)
+    threshold_pct = None if min_reversal_pct is None else max(float(min_reversal_pct), 0.0)
+    if threshold is None and threshold_pct is None:
+        threshold = max(_adaptive_reversal_threshold(df, atr_multiplier), 0.0)
 
-    pivots = _zigzag_pivots(df["close"].astype(float).to_numpy(), threshold, min_wave_days=min_wave_days)
+    pivots = _zigzag_pivots(
+        df["close"].astype(float).to_numpy(),
+        threshold,
+        min_reversal_pct=threshold_pct,
+        min_wave_days=min_wave_days,
+    )
     if len(pivots) < 2:
         return _empty_waves()
 
@@ -74,7 +82,12 @@ def classify_wave_levels(waves: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _zigzag_pivots(prices: np.ndarray, threshold: float, min_wave_days: int = 1) -> list[int]:
+def _zigzag_pivots(
+    prices: np.ndarray,
+    threshold: float | None,
+    min_reversal_pct: float | None = None,
+    min_wave_days: int = 1,
+) -> list[int]:
     if len(prices) < 2:
         return [0]
 
@@ -89,11 +102,11 @@ def _zigzag_pivots(prices: np.ndarray, threshold: float, min_wave_days: int = 1)
     for idx in range(1, len(prices)):
         price = float(prices[idx])
         if trend is None:
-            if price - pivot_price >= threshold:
+            if _up_move_reaches(pivot_price, price, threshold, min_reversal_pct):
                 trend = "up"
                 extreme_idx = idx
                 extreme_price = price
-            elif pivot_price - price >= threshold:
+            elif _down_move_reaches(pivot_price, price, threshold, min_reversal_pct):
                 trend = "down"
                 extreme_idx = idx
                 extreme_price = price
@@ -109,7 +122,7 @@ def _zigzag_pivots(prices: np.ndarray, threshold: float, min_wave_days: int = 1)
             if price > extreme_price:
                 extreme_idx = idx
                 extreme_price = price
-            elif extreme_price - price >= threshold:
+            elif _down_move_reaches(extreme_price, price, threshold, min_reversal_pct):
                 if pivots[-1] != extreme_idx and _has_min_wave_days(pivots[-1], extreme_idx, min_wave_days):
                     pivots.append(extreme_idx)
                     trend = "down"
@@ -119,7 +132,7 @@ def _zigzag_pivots(prices: np.ndarray, threshold: float, min_wave_days: int = 1)
             if price < extreme_price:
                 extreme_idx = idx
                 extreme_price = price
-            elif price - extreme_price >= threshold:
+            elif _up_move_reaches(extreme_price, price, threshold, min_reversal_pct):
                 if pivots[-1] != extreme_idx and _has_min_wave_days(pivots[-1], extreme_idx, min_wave_days):
                     pivots.append(extreme_idx)
                     trend = "up"
@@ -138,6 +151,28 @@ def _zigzag_pivots(prices: np.ndarray, threshold: float, min_wave_days: int = 1)
 
 def _has_min_wave_days(start_idx: int, end_idx: int, min_wave_days: int) -> bool:
     return abs(end_idx - start_idx) + 1 >= min_wave_days
+
+
+def _up_move_reaches(start_price: float, end_price: float, threshold: float | None, threshold_pct: float | None) -> bool:
+    if end_price <= start_price:
+        return False
+    if threshold_pct is not None:
+        return _pct_move(start_price, end_price) >= threshold_pct
+    return end_price - start_price >= float(threshold or 0.0)
+
+
+def _down_move_reaches(start_price: float, end_price: float, threshold: float | None, threshold_pct: float | None) -> bool:
+    if end_price >= start_price:
+        return False
+    if threshold_pct is not None:
+        return _pct_move(start_price, end_price) >= threshold_pct
+    return start_price - end_price >= float(threshold or 0.0)
+
+
+def _pct_move(start_price: float, end_price: float) -> float:
+    if start_price == 0:
+        return 0.0
+    return abs((end_price - start_price) / start_price * 100.0)
 
 
 def _adaptive_reversal_threshold(df: pd.DataFrame, atr_multiplier: float) -> float:
