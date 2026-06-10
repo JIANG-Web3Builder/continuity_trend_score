@@ -23,7 +23,7 @@ from trend_score.catalog import ASSET_GROUPS, get_assets
 from trend_score.compare import score_interval_continuity
 from trend_score.data import load_symbol_data
 from trend_score.scoring import score_waves
-from trend_score.waves import _adaptive_reversal_threshold, detect_waves
+from trend_score.waves import _rolling_reversal_thresholds, detect_waves
 
 
 REPORT_TITLE = "连续性系统—品种历史波段趋势识别与强度评分研究报告"
@@ -68,7 +68,7 @@ def collect_report_data(data_dir: Path) -> dict[str, Any]:
                 continue
 
             prices = prices.sort_values("trade_date").reset_index(drop=True)
-            threshold = _adaptive_reversal_threshold(prices, 1.2)
+            threshold = float(_rolling_reversal_thresholds(prices, 1.2).median())
             waves = detect_waves(prices, symbol=asset.ts_code)
             scored = score_waves(prices, waves)
 

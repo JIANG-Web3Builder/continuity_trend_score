@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from trend_score.waves import classify_wave_levels
+
 
 SCORE_COLUMNS = [
     "strength_score",
@@ -34,20 +36,29 @@ def score_waves(prices: pd.DataFrame, waves: pd.DataFrame, weights: dict[str, fl
         return result
 
     weights = weights or DEFAULT_WEIGHTS
-    result = waves.copy().reset_index(drop=True)
+    result = waves.copy()
+    if "status" in result.columns:
+        result = result[result["status"] == "confirmed"].copy()
+    if result.empty:
+        for column in SCORE_COLUMNS:
+            result[column] = pd.Series(dtype="float")
+        return result.reset_index(drop=True)
+    if "level" not in result.columns or result["level"].isna().any() or (result["level"].astype(str) == "").any():
+        result = classify_wave_levels(result)
+    result = result.reset_index(drop=True)
     segments = [_segment(prices, wave) for _, wave in result.iterrows()]
 
     score_keys = ["symbol", "direction", "level"]
-    result["strength_score"] = _grouped_percentile_score(result, result["pct_change"].abs(), score_keys)
-    result["duration_score"] = _grouped_percentile_score(result, result["days"], score_keys)
-    result["slope_score"] = _grouped_percentile_score(result, result["points"] / result["days"].clip(lower=1), score_keys)
+    result["strength_score"] = _expanding_grouped_percentile_score(result, result["pct_change"].abs(), score_keys)
+    result["duration_score"] = _expanding_grouped_percentile_score(result, result["days"], score_keys)
+    result["slope_score"] = _expanding_grouped_percentile_score(result, result["points"] / result["days"].clip(lower=1), score_keys)
     result["drawdown_score"] = [_drawdown_score(segment, wave) for segment, (_, wave) in zip(segments, result.iterrows())]
     result["stability_score"] = [_stability_score(segment) for segment in segments]
     result["volume_score"] = [_volume_score(segment, wave) for segment, (_, wave) in zip(segments, result.iterrows())]
 
     total = sum(result[column].astype(float) * weight for column, weight in weights.items())
     result["total_score"] = total.round(2).clip(0, 100)
-    result["historical_percentile"] = _group_percentile(result, "total_score")
+    result["historical_percentile"] = _expanding_grouped_percentile_score(result, result["total_score"], score_keys)
     return result
 
 
@@ -78,6 +89,36 @@ def _grouped_percentile_score(df: pd.DataFrame, values: pd.Series, keys: list[st
 def _group_percentile(df: pd.DataFrame, column: str) -> pd.Series:
     keys = ["symbol", "direction", "level"]
     return df.groupby(keys, dropna=False)[column].rank(pct=True, method="average").mul(100).round(2)
+
+
+def _expanding_grouped_percentile_score(df: pd.DataFrame, values: pd.Series, keys: list[str]) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    result = pd.Series(index=df.index, dtype="float64")
+    histories: dict[tuple[object, ...], list[float]] = {}
+
+    for index in _asof_ordered_index(df):
+        key = tuple(df.loc[index, key_name] for key_name in keys)
+        history = histories.setdefault(key, [])
+        value = float(numeric.loc[index])
+        sample = pd.Series(history + [value], dtype="float64")
+        rank = sample.rank(pct=True, method="average").iloc[-1] * 100.0
+        result.loc[index] = round(float(rank), 2)
+        history.append(value)
+    return result
+
+
+def _asof_ordered_index(df: pd.DataFrame) -> pd.Index:
+    order = pd.DataFrame(index=df.index)
+    if "confirmation_date" in df.columns:
+        order["_confirmation_date"] = pd.to_datetime(df["confirmation_date"], errors="coerce")
+    else:
+        order["_confirmation_date"] = pd.NaT
+    if "end_date" in df.columns:
+        order["_end_date"] = pd.to_datetime(df["end_date"], errors="coerce")
+    else:
+        order["_end_date"] = pd.NaT
+    order["_input_order"] = range(len(df))
+    return order.sort_values(["_confirmation_date", "_end_date", "_input_order"], na_position="last").index
 
 
 def _drawdown_score(segment: pd.DataFrame, wave: pd.Series) -> float:

@@ -118,9 +118,105 @@ def test_score_waves_percentile_scores_are_scoped_to_direction_and_level():
 
     scored = score_waves(prices, waves)
 
-    assert scored.loc[0, "strength_score"] == 50.0
+    assert scored.loc[0, "strength_score"] == 100.0
     assert scored.loc[1, "strength_score"] == 100.0
     assert scored.loc[2, "strength_score"] == 100.0
+
+
+def test_score_waves_excludes_open_waves_from_ranked_scoring():
+    prices = make_frame("000001.SH", [100, 105, 110, 104, 98, 101])
+    waves = pd.DataFrame(
+        [
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[0, "trade_date"],
+                "end_date": prices.loc[3, "trade_date"],
+                "confirmation_date": prices.loc[3, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 110.0,
+                "points": 10.0,
+                "pct_change": 10.0,
+                "days": 4,
+                "level": "large",
+                "status": "confirmed",
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "down",
+                "start_date": prices.loc[2, "trade_date"],
+                "end_date": prices.loc[5, "trade_date"],
+                "confirmation_date": pd.NaT,
+                "start_price": 110.0,
+                "end_price": 98.0,
+                "points": 12.0,
+                "pct_change": -10.91,
+                "days": 4,
+                "level": "large",
+                "status": "open",
+            },
+        ]
+    )
+
+    scored = score_waves(prices, waves)
+
+    assert scored["status"].tolist() == ["confirmed"]
+    assert len(rank_waves(scored)) == 1
+
+
+def test_score_waves_historical_percentile_uses_only_confirmed_history_to_date():
+    prices = make_frame("000001.SH", [100, 110, 104, 100, 118, 111, 105, 135, 126])
+    waves = pd.DataFrame(
+        [
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[0, "trade_date"],
+                "end_date": prices.loc[2, "trade_date"],
+                "confirmation_date": prices.loc[2, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 110.0,
+                "points": 10.0,
+                "pct_change": 10.0,
+                "days": 3,
+                "level": "large",
+                "status": "confirmed",
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[3, "trade_date"],
+                "end_date": prices.loc[5, "trade_date"],
+                "confirmation_date": prices.loc[5, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 118.0,
+                "points": 18.0,
+                "pct_change": 18.0,
+                "days": 3,
+                "level": "large",
+                "status": "confirmed",
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[6, "trade_date"],
+                "end_date": prices.loc[8, "trade_date"],
+                "confirmation_date": prices.loc[8, "trade_date"],
+                "start_price": 105.0,
+                "end_price": 135.0,
+                "points": 30.0,
+                "pct_change": 28.57,
+                "days": 3,
+                "level": "large",
+                "status": "confirmed",
+            },
+        ]
+    )
+
+    first_two = score_waves(prices, waves.iloc[:2])
+    all_scored = score_waves(prices, waves)
+
+    assert all_scored.loc[:1, "historical_percentile"].tolist() == first_two["historical_percentile"].tolist()
 
 
 def test_rank_waves_filters_by_direction_and_level():
