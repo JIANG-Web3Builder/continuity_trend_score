@@ -3,6 +3,20 @@ import importlib
 import pandas as pd
 
 
+def make_price_frame():
+    dates = pd.date_range("2026-01-01", periods=4, freq="D")
+    return pd.DataFrame(
+        {
+            "trade_date": dates,
+            "open": [100.0, 105.0, 103.0, 108.0],
+            "high": [106.0, 107.0, 110.0, 112.0],
+            "low": [99.0, 101.0, 102.0, 106.0],
+            "close": [105.0, 103.0, 108.0, 111.0],
+            "vol": [1000.0, 1200.0, 900.0, 1500.0],
+        }
+    )
+
+
 def test_app_import_does_not_require_streamlit_dependency():
     app = importlib.import_module("app")
 
@@ -79,3 +93,126 @@ def test_split_waves_for_display_keeps_open_wave_out_of_confirmed_history():
     assert confirmed["status"].tolist() == ["confirmed"]
     assert open_wave["status"] == "open"
     assert open_wave["points"] == 6.0
+
+
+def test_wave_background_spans_do_not_overlap_when_waves_overlap():
+    app = importlib.import_module("app")
+    waves = pd.DataFrame(
+        {
+            "direction": ["up", "down", "up"],
+            "start_date": pd.to_datetime(["2026-01-01", "2026-01-04", "2026-01-10"]),
+            "end_date": pd.to_datetime(["2026-01-08", "2026-01-12", "2026-01-15"]),
+        }
+    )
+
+    spans = app.wave_background_spans(waves)
+
+    assert [(span["x0"], span["x1"], span["direction"]) for span in spans] == [
+        (pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-04"), "up"),
+        (pd.Timestamp("2026-01-04"), pd.Timestamp("2026-01-10"), "down"),
+        (pd.Timestamp("2026-01-10"), pd.Timestamp("2026-01-15"), "up"),
+    ]
+
+
+def test_build_price_volume_figure_uses_candles_volume_and_range_slider():
+    app = importlib.import_module("app")
+    import plotly.graph_objects as go
+
+    waves = pd.DataFrame(
+        {
+            "direction": ["up"],
+            "start_date": pd.to_datetime(["2026-01-01"]),
+            "end_date": pd.to_datetime(["2026-01-03"]),
+        }
+    )
+
+    fig = app.build_price_volume_figure(go, make_price_frame(), waves, title="trial")
+
+    assert [trace.type for trace in fig.data] == ["candlestick", "bar"]
+    assert fig.layout.xaxis.rangeslider.visible is True
+    assert fig.layout.height >= 620
+    assert len(fig.layout.shapes) == 1
+
+
+def test_open_wave_summary_items_keep_full_dates():
+    app = importlib.import_module("app")
+    open_wave = pd.Series(
+        {
+            "direction": "down",
+            "start_date": pd.Timestamp("2026-05-25"),
+            "end_date": pd.Timestamp("2026-06-05"),
+            "points": 124.83,
+            "pct_change": -3.01,
+            "reversal_progress": 0.0,
+        }
+    )
+
+    items = app.open_wave_summary_items(open_wave)
+
+    assert ("起点", "2026-05-25") in items
+    assert ("最新日期", "2026-06-05") in items
+
+
+def test_format_display_dataframe_translates_score_columns_and_values():
+    app = importlib.import_module("app")
+    raw = pd.DataFrame(
+        {
+            "direction": ["up", "down"],
+            "status": ["confirmed", "open"],
+            "start_date": pd.to_datetime(["2026-01-01", "2026-01-05"]),
+            "total_score": [88.5, 66.0],
+            "strength_score": [90.0, 55.0],
+        }
+    )
+
+    display = app.format_display_dataframe(
+        raw,
+        ["direction", "status", "start_date", "total_score", "strength_score"],
+    )
+
+    assert display.columns.tolist() == ["方向", "状态", "起始日期", "总分", "强度分"]
+    assert display["方向"].tolist() == ["上涨", "下跌"]
+    assert display["状态"].tolist() == ["已确认", "未完成"]
+    assert display["起始日期"].tolist() == ["2026-01-01", "2026-01-05"]
+
+
+def test_sort_option_label_is_chinese():
+    app = importlib.import_module("app")
+
+    assert app.sort_option_label("total_score") == "总分"
+    assert app.sort_option_label("end_date") == "结束日期"
+
+
+def test_render_analysis_sections_uses_tabs():
+    app = importlib.import_module("app")
+
+    class FakeTab:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeStreamlit:
+        def __init__(self):
+            self.labels = None
+
+        def tabs(self, labels):
+            self.labels = labels
+            return [FakeTab() for _ in labels]
+
+    fake_st = FakeStreamlit()
+    calls = []
+
+    app.render_analysis_sections(
+        fake_st,
+        renderers=[
+            ("波段评分表", lambda: calls.append("table")),
+            ("单个波段详情", lambda: calls.append("detail")),
+            ("波段对比", lambda: calls.append("compare")),
+            ("区间横向对比", lambda: calls.append("interval")),
+        ],
+    )
+
+    assert fake_st.labels == ["波段评分表", "单个波段详情", "波段对比", "区间横向对比"]
+    assert calls == ["table", "detail", "compare", "interval"]
