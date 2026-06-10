@@ -35,7 +35,7 @@ def test_resolve_reversal_threshold_modes():
     assert app.resolve_reversal_threshold("点数", 80).points == 80.0
 
 
-def test_extend_latest_wave_for_chart_reaches_latest_price_date():
+def test_extend_latest_wave_for_chart_does_not_extend_confirmed_wave_to_latest_date():
     app = importlib.import_module("app")
     prices = pd.DataFrame(
         {
@@ -48,10 +48,34 @@ def test_extend_latest_wave_for_chart_reaches_latest_price_date():
             "direction": ["up", "down"],
             "start_date": pd.to_datetime(["2024-01-01", "2023-12-01"]),
             "end_date": pd.to_datetime(["2024-01-10", "2023-12-10"]),
+            "status": ["confirmed", "confirmed"],
         }
     )
 
     display_waves = app.extend_latest_wave_for_chart(waves, prices)
 
-    assert display_waves.loc[0, "end_date"] == pd.Timestamp("2024-01-20")
+    assert display_waves.loc[0, "end_date"] == pd.Timestamp("2024-01-10")
     assert waves.loc[0, "end_date"] == pd.Timestamp("2024-01-10")
+
+
+def test_split_waves_for_display_keeps_open_wave_out_of_confirmed_history():
+    app = importlib.import_module("app")
+    waves = pd.DataFrame(
+        {
+            "direction": ["up", "down"],
+            "status": ["confirmed", "open"],
+            "start_date": pd.to_datetime(["2024-01-01", "2024-01-05"]),
+            "end_date": pd.to_datetime(["2024-01-05", "2024-01-10"]),
+            "start_price": [100.0, 110.0],
+            "end_price": [110.0, 104.0],
+            "points": [10.0, 6.0],
+            "pct_change": [10.0, -5.45],
+            "days": [5, 6],
+        }
+    )
+
+    confirmed, open_wave = app.split_waves_for_display(waves)
+
+    assert confirmed["status"].tolist() == ["confirmed"]
+    assert open_wave["status"] == "open"
+    assert open_wave["points"] == 6.0

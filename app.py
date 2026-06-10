@@ -48,6 +48,19 @@ def build_wave_scores(
     return score_waves(df, waves)
 
 
+def split_waves_for_display(waves: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series | None]:
+    """Return confirmed history and the latest open wave as separate display objects."""
+    if waves.empty or "status" not in waves:
+        return waves.copy(), None
+
+    confirmed = waves[waves["status"] == "confirmed"].copy().reset_index(drop=True)
+    open_waves = waves[waves["status"] == "open"].copy()
+    if open_waves.empty:
+        return confirmed, None
+    latest_index = pd.to_datetime(open_waves["end_date"], errors="coerce").idxmax()
+    return confirmed, open_waves.loc[latest_index].copy()
+
+
 def filter_scored_waves_by_date(scored: pd.DataFrame, date_range) -> pd.DataFrame:
     """Filter already-scored waves to the selected display interval without recalculating ranks."""
     if scored.empty or not isinstance(date_range, tuple) or len(date_range) != 2:
@@ -58,19 +71,14 @@ def filter_scored_waves_by_date(scored: pd.DataFrame, date_range) -> pd.DataFram
 
 
 def extend_latest_wave_for_chart(waves: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
-    """Extend the last visible wave to the latest price date for chart shading only."""
-    if waves.empty or prices.empty or "end_date" not in waves or "trade_date" not in prices:
+    """Return confirmed waves for chart shading without extending them into the open interval."""
+    if waves.empty:
         return waves.copy()
 
     display = waves.copy()
-    latest_price_date = pd.to_datetime(prices["trade_date"]).max()
-    end_dates = pd.to_datetime(display["end_date"], errors="coerce")
-    if end_dates.isna().all() or latest_price_date <= end_dates.max():
-        return display
-
-    latest_wave_index = end_dates.idxmax()
-    display.loc[latest_wave_index, "end_date"] = latest_price_date
-    return display
+    if "status" in display:
+        display = display[display["status"] == "confirmed"].copy()
+    return display.reset_index(drop=True)
 
 
 def run_dashboard() -> None:
@@ -236,12 +244,14 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, reversal_thresho
     sort_by = controls[3].selectbox("排序", ["total_score", "end_date", "points", "days"], key=f"{group}_sort")
 
     filtered_df = _filter_by_date(df, date_range)
-    full_scored = build_wave_scores(
+    detected_waves = detect_waves(
         df,
         symbol,
         min_reversal=reversal_threshold.points,
         min_reversal_pct=reversal_threshold.pct,
     )
+    confirmed_waves, open_wave = split_waves_for_display(detected_waves)
+    full_scored = score_waves(df, confirmed_waves)
     scored = filter_scored_waves_by_date(full_scored, date_range)
     ranked = rank_waves(scored, direction=direction, level=level)
     if not ranked.empty:
@@ -250,6 +260,7 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, reversal_thresho
 
     _render_summary_metrics(st, filtered_df, scored, ranked)
     _render_price_chart(st, go, filtered_df, ranked)
+    _render_open_wave(st, open_wave)
     _render_score_table(st, ranked)
     _render_wave_detail(st, go, ranked)
     _render_wave_compare(st, px, df, scored)
@@ -315,6 +326,24 @@ def _render_price_chart(st, go, df: pd.DataFrame, waves: pd.DataFrame) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
+def _render_open_wave(st, open_wave: pd.Series | None) -> None:
+    st.subheader("当前未完成波段")
+    if open_wave is None:
+        st.info("当前没有未完成波段。")
+        return
+
+    direction = "上涨" if open_wave["direction"] == "up" else "下跌"
+    start = pd.Timestamp(open_wave["start_date"]).strftime("%Y-%m-%d")
+    end = pd.Timestamp(open_wave["end_date"]).strftime("%Y-%m-%d")
+    cols = st.columns(6)
+    cols[0].metric("方向", direction)
+    cols[1].metric("起点", start)
+    cols[2].metric("最新日期", end)
+    cols[3].metric("当前点数", f"{float(open_wave['points']):.2f}")
+    cols[4].metric("当前涨跌幅", f"{float(open_wave['pct_change']):.2f}%")
+    cols[5].metric("反转确认进度", f"{float(open_wave.get('reversal_progress', 0.0)):.1f}%")
+
+
 def _render_score_table(st, waves: pd.DataFrame) -> None:
     st.subheader("波段评分表")
     if waves.empty:
@@ -326,6 +355,8 @@ def _render_score_table(st, waves: pd.DataFrame) -> None:
         "level",
         "start_date",
         "end_date",
+        "extreme_date",
+        "confirmation_date",
         "points",
         "pct_change",
         "days",
@@ -485,7 +516,7 @@ def _render_interval_continuity(st, px, data_dir: Path, group: str, symbol_files
 
 def _format_dates(df: pd.DataFrame) -> pd.DataFrame:
     display = df.copy()
-    for column in ["start_date", "end_date", "trade_date"]:
+    for column in ["start_date", "end_date", "trade_date", "confirmation_date", "extreme_date"]:
         if column in display:
             display[column] = pd.to_datetime(display[column]).dt.strftime("%Y-%m-%d")
     return display
