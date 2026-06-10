@@ -22,6 +22,55 @@ DEFAULT_DATA_DIR = Path("data")
 DIRECTION_LABELS = {"全部": "全部", "up": "上涨", "down": "下跌"}
 LEVEL_OPTIONS = ["全部", "小", "中", "大", "超大"]
 GROUP_ORDER = ["index", "sector", "commodity"]
+UP_COLOR = "#d94b3d"
+DOWN_COLOR = "#16a37f"
+UP_BAND = "rgba(217, 75, 61, 0.10)"
+DOWN_BAND = "rgba(22, 163, 127, 0.10)"
+DISPLAY_COLUMN_LABELS = {
+    "symbol": "代码",
+    "name": "名称",
+    "label": "标签",
+    "wave": "波段",
+    "step": "进程",
+    "direction": "方向",
+    "status": "状态",
+    "level": "级别",
+    "start_date": "起始日期",
+    "end_date": "结束日期",
+    "extreme_date": "极值日期",
+    "confirmation_date": "确认日期",
+    "trade_date": "交易日期",
+    "start_price": "起点价格",
+    "end_price": "终点价格",
+    "extreme_price": "极值价格",
+    "confirmation_price": "确认价",
+    "close": "收盘价",
+    "relative_close": "归一化价格",
+    "points": "涨跌点数",
+    "pct_change": "涨跌幅(%)",
+    "days": "持续天数",
+    "slope": "斜率",
+    "max_adverse_pct": "最大逆向波动(%)",
+    "trend_day_ratio": "顺势天数占比",
+    "adverse_day_ratio": "逆势天数占比",
+    "total_score": "总分",
+    "historical_percentile": "历史分位(%)",
+    "interval_score": "区间评分",
+    "strength_score": "强度分",
+    "duration_score": "持续分",
+    "slope_score": "斜率分",
+    "drawdown_score": "回撤控制分",
+    "stability_score": "稳定性分",
+    "volume_score": "量能配合分",
+    "consistency_score": "方向一致性分",
+}
+STATUS_LABELS = {"confirmed": "已确认", "open": "未完成"}
+SORT_LABELS = {
+    "total_score": "总分",
+    "end_date": "结束日期",
+    "points": "涨跌点数",
+    "days": "持续天数",
+}
 
 
 @dataclass(frozen=True)
@@ -79,6 +128,141 @@ def extend_latest_wave_for_chart(waves: pd.DataFrame, prices: pd.DataFrame) -> p
     if "status" in display:
         display = display[display["status"] == "confirmed"].copy()
     return display.reset_index(drop=True)
+
+
+def wave_background_spans(waves: pd.DataFrame) -> list[dict[str, object]]:
+    """Return non-overlapping wave background spans ordered by start date."""
+    if waves.empty:
+        return []
+
+    required = {"start_date", "end_date", "direction"}
+    if not required.issubset(waves.columns):
+        return []
+
+    ordered = waves.copy()
+    ordered["start_date"] = pd.to_datetime(ordered["start_date"], errors="coerce")
+    ordered["end_date"] = pd.to_datetime(ordered["end_date"], errors="coerce")
+    ordered = ordered.dropna(subset=["start_date", "end_date"]).sort_values(["start_date", "end_date"])
+    spans: list[dict[str, object]] = []
+    rows = list(ordered.iterrows())
+    for position, (_, wave) in enumerate(rows):
+        start = pd.Timestamp(wave["start_date"])
+        end = pd.Timestamp(wave["end_date"])
+        if position + 1 < len(rows):
+            next_start = pd.Timestamp(rows[position + 1][1]["start_date"])
+            if next_start < end:
+                end = next_start
+        if end <= start:
+            continue
+        spans.append({"x0": start, "x1": end, "direction": wave["direction"]})
+    return spans
+
+
+def build_price_volume_figure(go, df: pd.DataFrame, waves: pd.DataFrame, title: str = "K线与波段区间"):
+    """Build the main price workspace with K-line, volume, wave bands, and range slider."""
+    from plotly.subplots import make_subplots
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        row_heights=[0.76, 0.24],
+        vertical_spacing=0.035,
+    )
+    candle_colors = _volume_colors(df)
+    fig.add_trace(
+        go.Candlestick(
+            x=df["trade_date"],
+            open=df["open"],
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            name="K线",
+            increasing={"line": {"color": UP_COLOR}, "fillcolor": UP_COLOR},
+            decreasing={"line": {"color": DOWN_COLOR}, "fillcolor": DOWN_COLOR},
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=df["trade_date"],
+            y=df["vol"],
+            name="成交量",
+            marker={"color": candle_colors, "opacity": 0.62},
+        ),
+        row=2,
+        col=1,
+    )
+    for span in wave_background_spans(waves):
+        color = UP_BAND if span["direction"] == "up" else DOWN_BAND
+        fig.add_vrect(
+            x0=span["x0"],
+            x1=span["x1"],
+            fillcolor=color,
+            line_width=0,
+            layer="below",
+            row=1,
+            col=1,
+        )
+    fig.update_layout(
+        template="plotly_white",
+        height=660,
+        margin={"l": 20, "r": 20, "t": 48, "b": 20},
+        title=title,
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        font={"color": "#172033"},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+        hovermode="x unified",
+        xaxis={"rangeslider": {"visible": True, "thickness": 0.08}, "showspikes": True},
+        xaxis2={"showspikes": True},
+        yaxis={"title": "价格", "gridcolor": "#edf1f6"},
+        yaxis2={"title": "成交量", "gridcolor": "#edf1f6"},
+    )
+    fig.update_xaxes(showgrid=False)
+    return fig
+
+
+def _volume_colors(df: pd.DataFrame) -> list[str]:
+    return [UP_COLOR if close >= open_ else DOWN_COLOR for open_, close in zip(df["open"], df["close"])]
+
+
+def open_wave_summary_items(open_wave: pd.Series) -> list[tuple[str, str]]:
+    direction = "上涨" if open_wave["direction"] == "up" else "下跌"
+    start = pd.Timestamp(open_wave["start_date"]).strftime("%Y-%m-%d")
+    end = pd.Timestamp(open_wave["end_date"]).strftime("%Y-%m-%d")
+    return [
+        ("方向", direction),
+        ("起点", start),
+        ("最新日期", end),
+        ("当前点数", f"{float(open_wave['points']):.2f}"),
+        ("当前涨跌幅", f"{float(open_wave['pct_change']):.2f}%"),
+        ("反转确认进度", f"{float(open_wave.get('reversal_progress', 0.0)):.1f}%"),
+    ]
+
+
+def render_analysis_sections(st, renderers: list[tuple[str, object]]) -> None:
+    tabs = st.tabs([label for label, _ in renderers])
+    for tab, (_, render) in zip(tabs, renderers):
+        with tab:
+            render()
+
+
+def sort_option_label(value: str) -> str:
+    return SORT_LABELS.get(value, value)
+
+
+def format_display_dataframe(df: pd.DataFrame, columns: list[str] | None = None) -> pd.DataFrame:
+    display = _format_dates(df)
+    if columns is not None:
+        existing_columns = [column for column in columns if column in display.columns]
+        display = display[existing_columns].copy()
+    if "direction" in display:
+        display["direction"] = display["direction"].map(lambda value: DIRECTION_LABELS.get(value, value))
+    if "status" in display:
+        display["status"] = display["status"].map(lambda value: STATUS_LABELS.get(value, value))
+    return display.rename(columns={column: DISPLAY_COLUMN_LABELS.get(column, column) for column in display.columns})
 
 
 def run_dashboard() -> None:
@@ -165,6 +349,34 @@ def _apply_theme(st) -> None:
             color: var(--ink);
             font-weight: 760;
         }
+        .open-wave-strip {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 0.35rem 0 1rem;
+        }
+        .open-wave-item {
+            background: #ffffff;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 0.75rem 0.85rem;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+            min-width: 0;
+        }
+        .open-wave-label {
+            color: var(--muted);
+            font-size: 0.82rem;
+            line-height: 1.15;
+            margin-bottom: 0.35rem;
+        }
+        .open-wave-value {
+            color: var(--ink);
+            font-size: 1.02rem;
+            font-weight: 720;
+            line-height: 1.2;
+            white-space: nowrap;
+            overflow: visible;
+        }
         div[data-baseweb="select"] > div,
         div[data-baseweb="input"] > div,
         div[data-baseweb="textarea"] > div {
@@ -194,7 +406,7 @@ def _apply_theme(st) -> None:
             background: var(--panel);
             border: 1px solid var(--line);
             border-radius: 8px;
-            padding: 0.35rem;
+            padding: 0.25rem;
         }
         .stAlert {
             border-radius: 8px;
@@ -241,7 +453,12 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, reversal_thresho
         key=f"{group}_direction",
     )
     level = controls[2].selectbox("波段级别", LEVEL_OPTIONS, key=f"{group}_level")
-    sort_by = controls[3].selectbox("排序", ["total_score", "end_date", "points", "days"], key=f"{group}_sort")
+    sort_by = controls[3].selectbox(
+        "排序",
+        ["total_score", "end_date", "points", "days"],
+        format_func=sort_option_label,
+        key=f"{group}_sort",
+    )
 
     filtered_df = _filter_by_date(df, date_range)
     detected_waves = detect_waves(
@@ -261,10 +478,15 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, reversal_thresho
     _render_summary_metrics(st, filtered_df, scored, ranked)
     _render_price_chart(st, go, filtered_df, ranked)
     _render_open_wave(st, open_wave)
-    _render_score_table(st, ranked)
-    _render_wave_detail(st, go, ranked)
-    _render_wave_compare(st, px, df, scored)
-    _render_interval_continuity(st, px, data_dir, group, symbol_files)
+    render_analysis_sections(
+        st,
+        [
+            ("波段评分表", lambda: _render_score_table(st, ranked)),
+            ("单个波段详情", lambda: _render_wave_detail(st, go, ranked)),
+            ("波段对比", lambda: _render_wave_compare(st, px, df, scored)),
+            ("区间横向对比", lambda: _render_interval_continuity(st, px, data_dir, group, symbol_files)),
+        ],
+    )
 
 
 def _filter_by_date(df: pd.DataFrame, date_range) -> pd.DataFrame:
@@ -293,36 +515,8 @@ def _render_missing_data_help(st, data_dir: Path, group: str) -> None:
 
 
 def _render_price_chart(st, go, df: pd.DataFrame, waves: pd.DataFrame) -> None:
-    fig = go.Figure()
     chart_waves = extend_latest_wave_for_chart(waves, df)
-    fig.add_trace(
-        go.Scatter(
-            x=df["trade_date"],
-            y=df["close"],
-            mode="lines",
-            name="close",
-            line={"color": "#172033", "width": 1.8},
-        )
-    )
-    for _, wave in chart_waves.iterrows():
-        color = "rgba(15, 118, 110, 0.14)" if wave["direction"] == "up" else "rgba(180, 35, 24, 0.14)"
-        fig.add_vrect(
-            x0=wave["start_date"],
-            x1=wave["end_date"],
-            fillcolor=color,
-            line_width=0,
-        )
-    fig.update_layout(
-        template="plotly_white",
-        height=420,
-        margin={"l": 20, "r": 20, "t": 44, "b": 20},
-        title="收盘价与波段区间",
-        paper_bgcolor="#ffffff",
-        plot_bgcolor="#ffffff",
-        font={"color": "#172033"},
-        xaxis={"gridcolor": "#edf1f6"},
-        yaxis={"gridcolor": "#edf1f6"},
-    )
+    fig = build_price_volume_figure(go, df, chart_waves, title="K线、成交量与波段区间")
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -332,16 +526,15 @@ def _render_open_wave(st, open_wave: pd.Series | None) -> None:
         st.info("当前没有未完成波段。")
         return
 
-    direction = "上涨" if open_wave["direction"] == "up" else "下跌"
-    start = pd.Timestamp(open_wave["start_date"]).strftime("%Y-%m-%d")
-    end = pd.Timestamp(open_wave["end_date"]).strftime("%Y-%m-%d")
-    cols = st.columns(6)
-    cols[0].metric("方向", direction)
-    cols[1].metric("起点", start)
-    cols[2].metric("最新日期", end)
-    cols[3].metric("当前点数", f"{float(open_wave['points']):.2f}")
-    cols[4].metric("当前涨跌幅", f"{float(open_wave['pct_change']):.2f}%")
-    cols[5].metric("反转确认进度", f"{float(open_wave.get('reversal_progress', 0.0)):.1f}%")
+    cards = []
+    for label, value in open_wave_summary_items(open_wave):
+        cards.append(
+            '<div class="open-wave-item">'
+            f'<div class="open-wave-label">{label}</div>'
+            f'<div class="open-wave-value">{value}</div>'
+            "</div>"
+        )
+    st.markdown(f'<div class="open-wave-strip">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
 def _render_score_table(st, waves: pd.DataFrame) -> None:
@@ -349,7 +542,6 @@ def _render_score_table(st, waves: pd.DataFrame) -> None:
     if waves.empty:
         st.info("当前筛选条件下没有波段。")
         return
-    display = _format_dates(waves)
     columns = [
         "direction",
         "level",
@@ -369,7 +561,7 @@ def _render_score_table(st, waves: pd.DataFrame) -> None:
         "stability_score",
         "volume_score",
     ]
-    st.dataframe(display[columns], use_container_width=True, hide_index=True)
+    st.dataframe(format_display_dataframe(waves, columns), use_container_width=True, hide_index=True)
 
 
 def _render_wave_detail(st, go, waves: pd.DataFrame) -> None:
@@ -431,6 +623,7 @@ def _render_wave_compare(st, px, df: pd.DataFrame, waves: pd.DataFrame) -> None:
             y="relative_close",
             color="wave",
             title="归一化走势（起点=100）",
+            labels={"step": "进程", "relative_close": "归一化价格", "wave": "波段"},
             color_discrete_sequence=["#0f766e", "#b7791f", "#2563eb", "#b42318", "#7c3aed", "#475467", "#0891b2", "#c2410c"],
         ).update_layout(
             template="plotly_white",
@@ -440,8 +633,7 @@ def _render_wave_compare(st, px, df: pd.DataFrame, waves: pd.DataFrame) -> None:
         ),
         use_container_width=True,
     )
-    metrics = _format_dates(comparison["metrics"])
-    st.dataframe(metrics, use_container_width=True, hide_index=True)
+    st.dataframe(format_display_dataframe(comparison["metrics"]), use_container_width=True, hide_index=True)
 
 
 def _render_interval_continuity(st, px, data_dir: Path, group: str, symbol_files: dict[str, Path]) -> None:
@@ -484,6 +676,7 @@ def _render_interval_continuity(st, px, data_dir: Path, group: str, symbol_files
             title="区间连续性评分排名",
             range_x=[0, 100],
             color="interval_score",
+            labels={"interval_score": "区间评分", "label": "品种"},
             color_continuous_scale=["#dfe9e8", "#0f766e"],
         ).update_layout(
             template="plotly_white",
@@ -493,7 +686,6 @@ def _render_interval_continuity(st, px, data_dir: Path, group: str, symbol_files
         ),
         use_container_width=True,
     )
-    display = _format_dates(ranked)
     columns = [
         "symbol",
         "name",
@@ -511,7 +703,7 @@ def _render_interval_continuity(st, px, data_dir: Path, group: str, symbol_files
         "stability_score",
         "volume_score",
     ]
-    st.dataframe(display[columns], use_container_width=True, hide_index=True)
+    st.dataframe(format_display_dataframe(ranked, columns), use_container_width=True, hide_index=True)
 
 
 def _format_dates(df: pd.DataFrame) -> pd.DataFrame:
