@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from trend_score.waves import classify_wave_levels
+from trend_score.waves import _classify_full_sample_levels, classify_wave_levels
 
 
 SCORE_COLUMNS = [
@@ -29,6 +29,24 @@ DEFAULT_WEIGHTS = {
 
 def score_waves(prices: pd.DataFrame, waves: pd.DataFrame, weights: dict[str, float] | None = None) -> pd.DataFrame:
     """Score detected waves with balanced continuity dimensions."""
+    return _score_waves(prices, waves, weights=weights, use_asof_percentiles=True)
+
+
+def score_review_waves(
+    prices: pd.DataFrame,
+    waves: pd.DataFrame,
+    weights: dict[str, float] | None = None,
+) -> pd.DataFrame:
+    """Score hindsight review waves with full-sample ranks."""
+    return _score_waves(prices, waves, weights=weights, use_asof_percentiles=False)
+
+
+def _score_waves(
+    prices: pd.DataFrame,
+    waves: pd.DataFrame,
+    weights: dict[str, float] | None,
+    use_asof_percentiles: bool,
+) -> pd.DataFrame:
     if waves.empty:
         result = waves.copy()
         for column in SCORE_COLUMNS:
@@ -44,21 +62,22 @@ def score_waves(prices: pd.DataFrame, waves: pd.DataFrame, weights: dict[str, fl
             result[column] = pd.Series(dtype="float")
         return result.reset_index(drop=True)
     if "level" not in result.columns or result["level"].isna().any() or (result["level"].astype(str) == "").any():
-        result = classify_wave_levels(result)
+        result = classify_wave_levels(result) if use_asof_percentiles else _classify_full_sample_levels(result)
     result = result.reset_index(drop=True)
     segments = [_segment(prices, wave) for _, wave in result.iterrows()]
 
     score_keys = ["symbol", "direction", "level"]
-    result["strength_score"] = _expanding_grouped_percentile_score(result, result["pct_change"].abs(), score_keys)
-    result["duration_score"] = _expanding_grouped_percentile_score(result, result["days"], score_keys)
-    result["slope_score"] = _expanding_grouped_percentile_score(result, result["points"] / result["days"].clip(lower=1), score_keys)
+    percentile_score = _expanding_grouped_percentile_score if use_asof_percentiles else _grouped_percentile_score
+    result["strength_score"] = percentile_score(result, result["pct_change"].abs(), score_keys)
+    result["duration_score"] = percentile_score(result, result["days"], score_keys)
+    result["slope_score"] = percentile_score(result, result["points"] / result["days"].clip(lower=1), score_keys)
     result["drawdown_score"] = [_drawdown_score(segment, wave) for segment, (_, wave) in zip(segments, result.iterrows())]
     result["stability_score"] = [_stability_score(segment) for segment in segments]
     result["volume_score"] = [_volume_score(segment, wave) for segment, (_, wave) in zip(segments, result.iterrows())]
 
     total = sum(result[column].astype(float) * weight for column, weight in weights.items())
     result["total_score"] = total.round(2).clip(0, 100)
-    result["historical_percentile"] = _expanding_grouped_percentile_score(result, result["total_score"], score_keys)
+    result["historical_percentile"] = percentile_score(result, result["total_score"], score_keys)
     return result
 
 

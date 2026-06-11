@@ -1,7 +1,7 @@
 import pandas as pd
 
 from trend_score.compare import compare_two_waves, compare_waves, rank_waves, relative_path
-from trend_score.scoring import score_waves
+from trend_score.scoring import score_review_waves, score_waves
 
 
 def make_frame(symbol, closes, vols=None):
@@ -217,6 +217,59 @@ def test_score_waves_historical_percentile_uses_only_confirmed_history_to_date()
     all_scored = score_waves(prices, waves)
 
     assert all_scored.loc[:1, "historical_percentile"].tolist() == first_two["historical_percentile"].tolist()
+
+
+def test_score_review_waves_uses_full_sample_percentiles():
+    prices = make_frame("000001.SH", [100, 110, 100, 120, 100, 130])
+    waves = pd.DataFrame(
+        [
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[0, "trade_date"],
+                "end_date": prices.loc[1, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 110.0,
+                "points": 10.0,
+                "pct_change": 10.0,
+                "days": 2,
+                "level": "大",
+                "status": "confirmed",
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[2, "trade_date"],
+                "end_date": prices.loc[3, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 120.0,
+                "points": 20.0,
+                "pct_change": 20.0,
+                "days": 2,
+                "level": "大",
+                "status": "confirmed",
+            },
+            {
+                "symbol": "000001.SH",
+                "direction": "up",
+                "start_date": prices.loc[4, "trade_date"],
+                "end_date": prices.loc[5, "trade_date"],
+                "start_price": 100.0,
+                "end_price": 130.0,
+                "points": 30.0,
+                "pct_change": 30.0,
+                "days": 2,
+                "level": "大",
+                "status": "confirmed",
+            },
+        ]
+    )
+
+    asof_scored = score_waves(prices, waves)
+    review_scored = score_review_waves(prices, waves)
+
+    assert asof_scored["strength_score"].tolist() == [100.0, 100.0, 100.0]
+    assert review_scored["strength_score"].tolist() == [33.33, 66.67, 100.0]
 
 
 def test_rank_waves_filters_by_direction_and_level():
