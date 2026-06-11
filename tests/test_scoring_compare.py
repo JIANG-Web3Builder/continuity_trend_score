@@ -1,5 +1,6 @@
 import pandas as pd
 
+from trend_score.candles import NON_STRICT_UP_LABEL, STRICT_DOWN_LABEL, STRICT_UP_LABEL
 from trend_score.compare import compare_two_waves, compare_waves, rank_waves, relative_path
 from trend_score.scoring import score_review_waves, score_waves
 
@@ -62,6 +63,7 @@ def test_score_waves_rewards_low_drawdown_more_than_choppy_path():
     assert scored.loc[0, "drawdown_score"] > scored.loc[1, "drawdown_score"]
     assert scored.loc[0, "total_score"] > scored.loc[1, "total_score"]
     assert {
+        "continuity_label",
         "strength_score",
         "duration_score",
         "slope_score",
@@ -71,6 +73,70 @@ def test_score_waves_rewards_low_drawdown_more_than_choppy_path():
         "total_score",
         "historical_percentile",
     }.issubset(scored.columns)
+
+
+def test_score_waves_labels_wave_continuity_from_price_path():
+    dates = pd.date_range("2024-01-01", periods=8, freq="D")
+    closes = [100, 102, 104, 103, 106, 108, 106, 104]
+    prices = pd.DataFrame(
+        {
+            "ts_code": "AAA",
+            "trade_date": dates,
+            "open": closes,
+            "high": [close + 1 for close in closes],
+            "low": [close - 1 for close in closes],
+            "close": closes,
+            "pre_close": [100, *closes[:-1]],
+            "change": [0, *[closes[i] - closes[i - 1] for i in range(1, len(closes))]],
+            "pct_chg": 0.0,
+            "vol": 1000.0,
+            "amount": [close * 1000 for close in closes],
+        }
+    )
+    waves = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "direction": "up",
+                "start_date": dates[1],
+                "end_date": dates[2],
+                "start_price": 102.0,
+                "end_price": 104.0,
+                "points": 2.0,
+                "pct_change": 1.96,
+                "days": 2,
+                "level": "中",
+            },
+            {
+                "symbol": "AAA",
+                "direction": "up",
+                "start_date": dates[1],
+                "end_date": dates[5],
+                "start_price": 102.0,
+                "end_price": 108.0,
+                "points": 6.0,
+                "pct_change": 5.88,
+                "days": 5,
+                "level": "中",
+            },
+            {
+                "symbol": "AAA",
+                "direction": "down",
+                "start_date": dates[6],
+                "end_date": dates[7],
+                "start_price": 106.0,
+                "end_price": 104.0,
+                "points": 2.0,
+                "pct_change": -1.89,
+                "days": 2,
+                "level": "中",
+            },
+        ]
+    )
+
+    scored = score_waves(prices, waves)
+
+    assert scored["continuity_label"].tolist() == [STRICT_UP_LABEL, NON_STRICT_UP_LABEL, STRICT_DOWN_LABEL]
 
 
 def test_score_waves_percentile_scores_are_scoped_to_direction_and_level():
