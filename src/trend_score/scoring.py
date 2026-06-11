@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from trend_score.candles import label_wave_continuity
 from trend_score.waves import _classify_full_sample_levels, classify_wave_levels
 
 
@@ -49,6 +50,8 @@ def _score_waves(
 ) -> pd.DataFrame:
     if waves.empty:
         result = waves.copy()
+        if "continuity_label" not in result.columns:
+            result["continuity_label"] = pd.Series(dtype="object")
         for column in SCORE_COLUMNS:
             result[column] = pd.Series(dtype="float")
         return result
@@ -58,6 +61,8 @@ def _score_waves(
     if "status" in result.columns:
         result = result[result["status"] == "confirmed"].copy()
     if result.empty:
+        if "continuity_label" not in result.columns:
+            result["continuity_label"] = pd.Series(dtype="object")
         for column in SCORE_COLUMNS:
             result[column] = pd.Series(dtype="float")
         return result.reset_index(drop=True)
@@ -65,6 +70,10 @@ def _score_waves(
         result = classify_wave_levels(result) if use_asof_percentiles else _classify_full_sample_levels(result)
     result = result.reset_index(drop=True)
     segments = [_segment(prices, wave) for _, wave in result.iterrows()]
+    result["continuity_label"] = [
+        label_wave_continuity(segment, str(wave["direction"]))
+        for segment, (_, wave) in zip(segments, result.iterrows())
+    ]
 
     score_keys = ["symbol", "direction", "level"]
     percentile_score = _expanding_grouped_percentile_score if use_asof_percentiles else _grouped_percentile_score

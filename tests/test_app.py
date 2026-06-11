@@ -218,6 +218,100 @@ def test_format_display_dataframe_translates_score_columns_and_values():
     assert display["起始日期"].tolist() == ["2026-01-01", "2026-01-05"]
 
 
+def test_format_display_dataframe_translates_strict_run_columns():
+    app = importlib.import_module("app")
+    raw = pd.DataFrame(
+        {
+            "continuity_label": ["严格连阳"],
+            "current_direction": ["up"],
+            "current_run_days": [3],
+            "longest_up_days": [4],
+            "longest_down_days": [2],
+            "longest_direction": ["up"],
+            "longest_days": [4],
+        }
+    )
+
+    display = app.format_display_dataframe(raw)
+
+    assert display.columns.tolist() == ["连续标签", "当前方向", "当前连续天数", "最长连阳", "最长连阴", "最长方向", "最长连续天数"]
+
+
+def test_strict_run_display_rows_keeps_full_history():
+    app = importlib.import_module("app")
+    raw = pd.DataFrame(
+        {
+            "end_date": pd.date_range("2024-01-01", periods=15, freq="D"),
+            "days": [4] * 15,
+        }
+    )
+
+    display = app.strict_run_display_rows(raw)
+
+    assert len(display) == 15
+    assert display["end_date"].tolist() == list(reversed(raw["end_date"].tolist()))
+
+
+def test_strict_run_display_rows_only_keeps_strict_runs_longer_than_three_days():
+    app = importlib.import_module("app")
+    raw = pd.DataFrame(
+        {
+            "continuity_label": ["非严格连阳", "严格连阳", "严格连阴", "严格连阳"],
+            "end_date": pd.date_range("2024-01-01", periods=4, freq="D"),
+            "days": [8, 3, 4, 5],
+        }
+    )
+
+    display = app.strict_run_display_rows(raw)
+
+    assert display[["continuity_label", "days"]].to_dict("records") == [
+        {"continuity_label": "严格连阳", "days": 5},
+        {"continuity_label": "严格连阴", "days": 4},
+    ]
+
+
+def test_render_score_table_includes_continuity_label_column():
+    app = importlib.import_module("app")
+
+    class FakeStreamlit:
+        def __init__(self):
+            self.frame = None
+
+        def subheader(self, _text):
+            pass
+
+        def info(self, _text):
+            pass
+
+        def dataframe(self, frame, **_kwargs):
+            self.frame = frame
+
+    waves = pd.DataFrame(
+        {
+            "direction": ["up"],
+            "level": ["中"],
+            "continuity_label": ["非严格连阳"],
+            "start_date": pd.to_datetime(["2026-04-27"]),
+            "end_date": pd.to_datetime(["2026-05-11"]),
+            "points": [138.67],
+            "pct_change": [3.39],
+            "days": [8],
+            "total_score": [80.0],
+        }
+    )
+    fake_st = FakeStreamlit()
+
+    app._render_score_table(fake_st, waves)
+
+    assert app.DISPLAY_COLUMN_LABELS["continuity_label"] in fake_st.frame.columns
+
+
+def test_analysis_tab_labels_include_strict_run_view():
+    app = importlib.import_module("app")
+
+    assert app.ANALYSIS_TAB_LABELS == ["波段评分表", "单个波段详情", "波段对比", "区间横向对比", "连阴连阳识别"]
+
+
 def test_sort_option_label_is_chinese():
     app = importlib.import_module("app")
 

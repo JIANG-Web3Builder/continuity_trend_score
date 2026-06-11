@@ -12,6 +12,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from trend_score.catalog import ASSET_GROUPS, asset_options, get_assets
+from trend_score.candles import STRICT_DOWN_LABEL, STRICT_UP_LABEL, detect_strict_runs, summarize_strict_runs
 from trend_score.compare import compare_waves, rank_waves, score_interval_continuity
 from trend_score.data import available_symbol_files, display_name, load_symbol_data
 from trend_score.scoring import score_review_waves, score_waves
@@ -25,6 +26,7 @@ WAVE_MODE_OPTIONS = [WAVE_MODE_ASOF, WAVE_MODE_REVIEW]
 DIRECTION_LABELS = {"全部": "全部", "up": "上涨", "down": "下跌"}
 LEVEL_OPTIONS = ["全部", "小", "中", "大", "超大"]
 GROUP_ORDER = ["index", "sector", "commodity"]
+ANALYSIS_TAB_LABELS = ["波段评分表", "单个波段详情", "波段对比", "区间横向对比", "连阴连阳识别"]
 UP_COLOR = "#d94b3d"
 DOWN_COLOR = "#16a37f"
 UP_BAND = "rgba(217, 75, 61, 0.10)"
@@ -56,6 +58,13 @@ DISPLAY_COLUMN_LABELS = {
     "max_adverse_pct": "最大逆向波动(%)",
     "trend_day_ratio": "顺势天数占比",
     "adverse_day_ratio": "逆势天数占比",
+    "continuity_label": "连续标签",
+    "current_direction": "当前方向",
+    "current_run_days": "当前连续天数",
+    "longest_up_days": "最长连阳",
+    "longest_down_days": "最长连阴",
+    "longest_direction": "最长方向",
+    "longest_days": "最长连续天数",
     "total_score": "总分",
     "historical_percentile": "历史分位(%)",
     "interval_score": "区间评分",
@@ -286,9 +295,23 @@ def format_display_dataframe(df: pd.DataFrame, columns: list[str] | None = None)
         display = display[existing_columns].copy()
     if "direction" in display:
         display["direction"] = display["direction"].map(lambda value: DIRECTION_LABELS.get(value, value))
+    for direction_column in ["current_direction", "longest_direction"]:
+        if direction_column in display:
+            display[direction_column] = display[direction_column].map(lambda value: DIRECTION_LABELS.get(value, value))
     if "status" in display:
         display["status"] = display["status"].map(lambda value: STATUS_LABELS.get(value, value))
     return display.rename(columns={column: DISPLAY_COLUMN_LABELS.get(column, column) for column in display.columns})
+
+
+def strict_run_display_rows(runs: pd.DataFrame) -> pd.DataFrame:
+    if runs.empty or "end_date" not in runs:
+        return runs.copy()
+    result = runs.copy()
+    if "continuity_label" in result:
+        result = result[result["continuity_label"].isin([STRICT_UP_LABEL, STRICT_DOWN_LABEL])]
+    if "days" in result:
+        result = result[pd.to_numeric(result["days"], errors="coerce") > 3]
+    return result.sort_values("end_date", ascending=False).reset_index(drop=True)
 
 
 def run_dashboard() -> None:
@@ -535,10 +558,11 @@ def _render_asset_group(
     render_analysis_sections(
         st,
         [
-            ("波段评分表", lambda: _render_score_table(st, ranked)),
-            ("单个波段详情", lambda: _render_wave_detail(st, go, ranked)),
-            ("波段对比", lambda: _render_wave_compare(st, px, df, scored)),
-            ("区间横向对比", lambda: _render_interval_continuity(st, px, data_dir, group, symbol_files)),
+            (ANALYSIS_TAB_LABELS[0], lambda: _render_score_table(st, ranked)),
+            (ANALYSIS_TAB_LABELS[1], lambda: _render_wave_detail(st, go, ranked)),
+            (ANALYSIS_TAB_LABELS[2], lambda: _render_wave_compare(st, px, df, scored)),
+            (ANALYSIS_TAB_LABELS[3], lambda: _render_interval_continuity(st, px, data_dir, group, symbol_files)),
+            (ANALYSIS_TAB_LABELS[4], lambda: _render_strict_runs(st, data_dir, group, symbol_files, df, date_range)),
         ],
     )
 
@@ -599,6 +623,7 @@ def _render_score_table(st, waves: pd.DataFrame) -> None:
     columns = [
         "direction",
         "level",
+        "continuity_label",
         "start_date",
         "end_date",
         "extreme_date",
@@ -758,6 +783,59 @@ def _render_interval_continuity(st, px, data_dir: Path, group: str, symbol_files
         "volume_score",
     ]
     st.dataframe(format_display_dataframe(ranked, columns), use_container_width=True, hide_index=True)
+
+
+def _render_strict_runs(
+    st,
+    data_dir: Path,
+    group: str,
+    symbol_files: dict[str, Path],
+    current_df: pd.DataFrame,
+    date_range,
+) -> None:
+    st.subheader("连阴连阳识别")
+    filtered_current = _filter_by_date(current_df, date_range)
+    runs = detect_strict_runs(filtered_current)
+
+    st.markdown("当前品种严格连阴连阳表（持续天数大于 3）")
+    display_runs = strict_run_display_rows(runs)
+    if display_runs.empty:
+        st.info("当前日期范围内没有持续天数大于 3 的严格连阳或连阴段。")
+    else:
+        columns = ["continuity_label", "direction", "status", "start_date", "end_date", "days", "pct_change", "start_price", "end_price"]
+        st.dataframe(format_display_dataframe(display_runs, columns), use_container_width=True, hide_index=True)
+
+    frames = []
+    for symbol in symbol_files:
+        try:
+            frames.append(load_symbol_data(data_dir, symbol, group=group))
+        except FileNotFoundError:
+            continue
+    if not frames or not isinstance(date_range, tuple) or len(date_range) != 2:
+        return
+
+    prices = pd.concat(frames, ignore_index=True)
+    summary = summarize_strict_runs(prices, pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1]))
+    st.markdown("所选区间横向统计")
+    if summary.empty:
+        st.info("所选区间内没有可统计的严格连续形态。")
+        return
+
+    summary["name"] = summary["symbol"].map(lambda code: display_name(code, group))
+    columns = [
+        "symbol",
+        "name",
+        "continuity_label",
+        "start_date",
+        "end_date",
+        "current_direction",
+        "current_run_days",
+        "longest_up_days",
+        "longest_down_days",
+        "longest_direction",
+        "longest_days",
+    ]
+    st.dataframe(format_display_dataframe(summary, columns), use_container_width=True, hide_index=True)
 
 
 def _format_dates(df: pd.DataFrame) -> pd.DataFrame:
