@@ -49,6 +49,48 @@ def test_resolve_reversal_threshold_modes():
     assert app.resolve_reversal_threshold("点数", 80).points == 80.0
 
 
+def test_wave_mode_options_are_chinese_and_default_to_asof():
+    app = importlib.import_module("app")
+
+    assert app.WAVE_MODE_OPTIONS == ["无未来函数模式", "复盘模式"]
+
+
+def test_detect_waves_for_mode_switches_between_asof_and_review_dates():
+    app = importlib.import_module("app")
+    dates = pd.date_range("2024-01-01", periods=5, freq="D")
+    prices = pd.DataFrame(
+        {
+            "ts_code": "000001.SH",
+            "trade_date": dates,
+            "open": [100, 105, 110, 108, 104],
+            "high": [101, 106, 111, 109, 105],
+            "low": [99, 104, 109, 107, 103],
+            "close": [100, 105, 110, 108, 104],
+            "pre_close": [100, 100, 105, 110, 108],
+            "vol": [1000] * 5,
+        }
+    )
+
+    asof = app.detect_waves_for_mode(
+        prices,
+        "000001.SH",
+        app.WAVE_MODE_OPTIONS[0],
+        min_reversal=4,
+        min_wave_days=1,
+    )
+    review = app.detect_waves_for_mode(
+        prices,
+        "000001.SH",
+        app.WAVE_MODE_OPTIONS[1],
+        min_reversal=4,
+        min_wave_days=1,
+    )
+
+    assert asof[asof["status"] == "confirmed"].loc[0, "end_date"] == pd.Timestamp("2024-01-05")
+    assert review.loc[0, "end_date"] == pd.Timestamp("2024-01-03")
+    assert set(review["status"]) == {"confirmed"}
+
+
 def test_extend_latest_wave_for_chart_does_not_extend_confirmed_wave_to_latest_date():
     app = importlib.import_module("app")
     prices = pd.DataFrame(

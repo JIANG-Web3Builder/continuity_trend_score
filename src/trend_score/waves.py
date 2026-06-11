@@ -38,6 +38,67 @@ def detect_waves(
     return classify_wave_levels(pd.DataFrame(rows)) if rows else _empty_waves()
 
 
+def detect_review_waves(
+    prices: pd.DataFrame,
+    symbol: str | None = None,
+    min_reversal: float | None = None,
+    min_reversal_pct: float | None = None,
+    atr_multiplier: float = 1.2,
+    min_wave_days: int = 3,
+) -> pd.DataFrame:
+    """Detect hindsight ZigZag waves for review/backtest-style analysis."""
+    if prices.empty:
+        return _empty_waves()
+
+    df = prices.sort_values("trade_date").reset_index(drop=True).copy()
+    symbol_value = symbol or str(df.loc[0, "ts_code"])
+    threshold = None if min_reversal is None else max(float(min_reversal), 0.0)
+    threshold_pct = None if min_reversal_pct is None else max(float(min_reversal_pct), 0.0)
+    if threshold is None and threshold_pct is None:
+        threshold = max(_adaptive_reversal_threshold(df, atr_multiplier), 0.0)
+
+    pivots = _zigzag_pivots(
+        df["close"].astype(float).to_numpy(),
+        threshold,
+        min_reversal_pct=threshold_pct,
+        min_wave_days=min_wave_days,
+    )
+    if len(pivots) < 2:
+        return _empty_waves()
+
+    rows = []
+    for start_idx, end_idx in zip(pivots[:-1], pivots[1:]):
+        start_price = float(df.loc[start_idx, "close"])
+        end_price = float(df.loc[end_idx, "close"])
+        delta = end_price - start_price
+        if delta == 0:
+            continue
+        end_date = pd.Timestamp(df.loc[end_idx, "trade_date"])
+        rows.append(
+            {
+                "symbol": symbol_value,
+                "direction": "up" if delta > 0 else "down",
+                "status": "confirmed",
+                "start_date": pd.Timestamp(df.loc[start_idx, "trade_date"]),
+                "end_date": end_date,
+                "confirmation_date": pd.NaT,
+                "extreme_date": end_date,
+                "start_price": start_price,
+                "end_price": end_price,
+                "extreme_price": end_price,
+                "confirmation_price": np.nan,
+                "points": round(abs(delta), 6),
+                "pct_change": round(delta / start_price * 100, 6) if start_price else 0.0,
+                "days": int(end_idx - start_idx + 1),
+                "reversal_threshold": float(threshold or 0.0),
+                "reversal_threshold_pct": float(threshold_pct or 0.0),
+                "reversal_progress": 0.0,
+            }
+        )
+
+    return _classify_full_sample_levels(pd.DataFrame(rows)) if rows else _empty_waves()
+
+
 def classify_wave_levels(waves: pd.DataFrame) -> pd.DataFrame:
     """Classify waves by each symbol's own point-size quantiles."""
     if waves.empty:

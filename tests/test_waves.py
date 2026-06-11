@@ -1,6 +1,6 @@
 import pandas as pd
 
-from trend_score.waves import classify_wave_levels, detect_waves, _rolling_reversal_thresholds
+from trend_score.waves import classify_wave_levels, detect_review_waves, detect_waves, _rolling_reversal_thresholds
 
 
 def price_frame(closes):
@@ -99,6 +99,18 @@ def test_detect_waves_does_not_confirm_turn_before_reversal_threshold_is_visible
 
     assert partial_waves[partial_waves["status"] == "confirmed"].empty
     assert len(full_waves[full_waves["status"] == "confirmed"]) == 1
+
+
+def test_detect_review_waves_uses_hindsight_extreme_dates_without_open_wave():
+    df = price_frame([100, 105, 110, 108, 104])
+
+    waves = detect_review_waves(df, symbol="000001.SH", min_reversal=4, min_wave_days=1)
+
+    assert set(waves["status"]) == {"confirmed"}
+    assert waves.loc[0, "direction"] == "up"
+    assert waves.loc[0, "end_date"] == pd.Timestamp("2024-01-03")
+    assert waves.loc[0, "extreme_date"] == pd.Timestamp("2024-01-03")
+    assert pd.isna(waves.loc[0, "confirmation_date"])
 
 
 def test_rolling_reversal_thresholds_do_not_change_when_future_prices_are_appended():

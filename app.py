@@ -14,11 +14,14 @@ if str(SRC_DIR) not in sys.path:
 from trend_score.catalog import ASSET_GROUPS, asset_options, get_assets
 from trend_score.compare import compare_waves, rank_waves, score_interval_continuity
 from trend_score.data import available_symbol_files, display_name, load_symbol_data
-from trend_score.scoring import score_waves
-from trend_score.waves import detect_waves
+from trend_score.scoring import score_review_waves, score_waves
+from trend_score.waves import detect_review_waves, detect_waves
 
 
 DEFAULT_DATA_DIR = Path("data")
+WAVE_MODE_ASOF = "无未来函数模式"
+WAVE_MODE_REVIEW = "复盘模式"
+WAVE_MODE_OPTIONS = [WAVE_MODE_ASOF, WAVE_MODE_REVIEW]
 DIRECTION_LABELS = {"全部": "全部", "up": "上涨", "down": "下跌"}
 LEVEL_OPTIONS = ["全部", "小", "中", "大", "超大"]
 GROUP_ORDER = ["index", "sector", "commodity"]
@@ -95,6 +98,29 @@ def build_wave_scores(
 ) -> pd.DataFrame:
     waves = detect_waves(df, symbol=symbol, min_reversal=min_reversal, min_reversal_pct=min_reversal_pct)
     return score_waves(df, waves)
+
+
+def detect_waves_for_mode(
+    df: pd.DataFrame,
+    symbol: str,
+    wave_mode: str,
+    min_reversal: float | None = None,
+    min_reversal_pct: float | None = None,
+    min_wave_days: int = 3,
+) -> pd.DataFrame:
+    detector = detect_review_waves if wave_mode == WAVE_MODE_REVIEW else detect_waves
+    return detector(
+        df,
+        symbol=symbol,
+        min_reversal=min_reversal,
+        min_reversal_pct=min_reversal_pct,
+        min_wave_days=min_wave_days,
+    )
+
+
+def score_waves_for_mode(df: pd.DataFrame, waves: pd.DataFrame, wave_mode: str) -> pd.DataFrame:
+    scorer = score_review_waves if wave_mode == WAVE_MODE_REVIEW else score_waves
+    return scorer(df, waves)
 
 
 def split_waves_for_display(waves: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series | None]:
@@ -277,6 +303,7 @@ def run_dashboard() -> None:
     st.set_page_config(page_title="连续性趋势评分", layout="wide")
     _apply_theme(st)
     st.title("连续性系统 - 品种历史波段趋势识别与强度评分")
+    wave_mode = _render_wave_mode_selector(st)
 
     data_dir = Path(st.sidebar.text_input("本地 CSV 目录", str(DEFAULT_DATA_DIR)))
     page_label_to_group = {ASSET_GROUPS[group]: group for group in GROUP_ORDER}
@@ -292,7 +319,22 @@ def run_dashboard() -> None:
         st.sidebar.caption("自动模式会按 ATR、日波动和绝对波动估算阈值。")
     reversal_threshold = resolve_reversal_threshold(threshold_mode, threshold_value)
 
-    _render_asset_group(st, px, go, data_dir, group, reversal_threshold)
+    _render_asset_group(st, px, go, data_dir, group, reversal_threshold, wave_mode)
+
+
+def _render_wave_mode_selector(st) -> str:
+    controls = st.columns([1.15, 3.2])
+    if hasattr(controls[0], "segmented_control"):
+        wave_mode = controls[0].segmented_control("识别模式", WAVE_MODE_OPTIONS, default=WAVE_MODE_ASOF)
+    else:
+        wave_mode = controls[0].radio("识别模式", WAVE_MODE_OPTIONS, horizontal=True)
+    note = (
+        "严格 as-of：只在反向阈值触发当天确认上一段波段，适合实盘观察。"
+        if wave_mode == WAVE_MODE_ASOF
+        else "复盘口径：使用事后 ZigZag 极值日和全样本分位，适合历史回看。"
+    )
+    controls[1].caption(note)
+    return wave_mode
 
 
 def _apply_theme(st) -> None:
@@ -417,7 +459,15 @@ def _apply_theme(st) -> None:
     )
 
 
-def _render_asset_group(st, px, go, data_dir: Path, group: str, reversal_threshold: ReversalThreshold) -> None:
+def _render_asset_group(
+    st,
+    px,
+    go,
+    data_dir: Path,
+    group: str,
+    reversal_threshold: ReversalThreshold,
+    wave_mode: str,
+) -> None:
     st.header(ASSET_GROUPS[group])
     symbol_files = available_symbol_files(data_dir, group=group)
     if not symbol_files:
@@ -461,14 +511,15 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, reversal_thresho
     )
 
     filtered_df = _filter_by_date(df, date_range)
-    detected_waves = detect_waves(
+    detected_waves = detect_waves_for_mode(
         df,
         symbol,
+        wave_mode,
         min_reversal=reversal_threshold.points,
         min_reversal_pct=reversal_threshold.pct,
     )
     confirmed_waves, open_wave = split_waves_for_display(detected_waves)
-    full_scored = score_waves(df, confirmed_waves)
+    full_scored = score_waves_for_mode(df, confirmed_waves, wave_mode)
     scored = filter_scored_waves_by_date(full_scored, date_range)
     ranked = rank_waves(scored, direction=direction, level=level)
     if not ranked.empty:
@@ -476,8 +527,11 @@ def _render_asset_group(st, px, go, data_dir: Path, group: str, reversal_thresho
         ranked = ranked.sort_values(sort_by, ascending=ascending).reset_index(drop=True)
 
     _render_summary_metrics(st, filtered_df, scored, ranked)
-    _render_price_chart(st, go, filtered_df, ranked)
-    _render_open_wave(st, open_wave)
+    _render_price_chart(st, go, filtered_df, ranked, wave_mode)
+    if wave_mode == WAVE_MODE_ASOF:
+        _render_open_wave(st, open_wave)
+    else:
+        st.info("复盘模式使用事后极值日切分波段，不展示当前未完成波段。")
     render_analysis_sections(
         st,
         [
@@ -514,9 +568,9 @@ def _render_missing_data_help(st, data_dir: Path, group: str) -> None:
     st.code("\n".join(f"{asset.ts_code}.csv  # {asset.name}" for asset in get_assets(group)))
 
 
-def _render_price_chart(st, go, df: pd.DataFrame, waves: pd.DataFrame) -> None:
+def _render_price_chart(st, go, df: pd.DataFrame, waves: pd.DataFrame, wave_mode: str = WAVE_MODE_ASOF) -> None:
     chart_waves = extend_latest_wave_for_chart(waves, df)
-    fig = build_price_volume_figure(go, df, chart_waves, title="K线、成交量与波段区间")
+    fig = build_price_volume_figure(go, df, chart_waves, title=f"K线、成交量与波段区间（{wave_mode}）")
     st.plotly_chart(fig, use_container_width=True)
 
 
