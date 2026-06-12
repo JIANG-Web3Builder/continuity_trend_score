@@ -346,15 +346,19 @@ def strict_run_summary_table_columns() -> list[str]:
 
 
 def strict_run_summary_interval(st, prices: pd.DataFrame, default_date_range, key: str):
-    min_date = prices["trade_date"].min().date()
-    max_date = prices["trade_date"].max().date()
+    if prices.empty or "trade_date" not in prices:
+        return None
+    trade_dates = pd.to_datetime(prices["trade_date"], errors="coerce")
+    if trade_dates.isna().all():
+        return None
+    min_date = trade_dates.min().date()
+    max_date = trade_dates.max().date()
     value = (min_date, max_date)
     if isinstance(default_date_range, tuple) and len(default_date_range) == 2:
         start = max(pd.Timestamp(default_date_range[0]).date(), min_date)
         end = min(pd.Timestamp(default_date_range[1]).date(), max_date)
         if start <= end:
             value = (start, end)
-
     interval = st.date_input(
         "横向统计区间",
         value=value,
