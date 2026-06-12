@@ -26,6 +26,7 @@ WAVE_MODE_OPTIONS = [WAVE_MODE_ASOF, WAVE_MODE_REVIEW]
 DIRECTION_LABELS = {"全部": "全部", "up": "上涨", "down": "下跌"}
 LEVEL_OPTIONS = ["全部", "小", "中", "大", "超大"]
 GROUP_ORDER = ["index", "sector", "commodity"]
+MIN_WAVE_DISPLAY_DAYS = 7
 ANALYSIS_TAB_LABELS = ["波段评分表", "单个波段详情", "波段对比", "区间横向对比", "连阴连阳识别"]
 UP_COLOR = "#d94b3d"
 DOWN_COLOR = "#16a37f"
@@ -548,6 +549,8 @@ def _render_asset_group(
     if not ranked.empty:
         ascending = sort_by == "end_date"
         ranked = ranked.sort_values(sort_by, ascending=ascending).reset_index(drop=True)
+    if not ranked.empty and "days" in ranked.columns:
+        ranked = ranked[ranked["days"] >= MIN_WAVE_DISPLAY_DAYS].reset_index(drop=True)
 
     _render_summary_metrics(st, filtered_df, scored, ranked)
     _render_price_chart(st, go, filtered_df, ranked, wave_mode)
@@ -560,7 +563,7 @@ def _render_asset_group(
         [
             (ANALYSIS_TAB_LABELS[0], lambda: _render_score_table(st, ranked)),
             (ANALYSIS_TAB_LABELS[1], lambda: _render_wave_detail(st, go, ranked)),
-            (ANALYSIS_TAB_LABELS[2], lambda: _render_wave_compare(st, px, df, scored)),
+            (ANALYSIS_TAB_LABELS[2], lambda: _render_wave_compare(st, px, df, ranked)),
             (ANALYSIS_TAB_LABELS[3], lambda: _render_interval_continuity(st, px, data_dir, group, symbol_files)),
             (ANALYSIS_TAB_LABELS[4], lambda: _render_strict_runs(st, data_dir, group, symbol_files, df, date_range)),
         ],
@@ -576,7 +579,7 @@ def _filter_by_date(df: pd.DataFrame, date_range) -> pd.DataFrame:
 
 def _render_summary_metrics(st, df: pd.DataFrame, scored: pd.DataFrame, ranked: pd.DataFrame) -> None:
     metric_cols = st.columns(4)
-    metric_cols[0].metric("识别波段", len(scored))
+    metric_cols[0].metric("检测波段", len(scored))
     metric_cols[1].metric("筛选后", len(ranked))
     metric_cols[2].metric("最高分", f"{ranked['total_score'].max():.1f}" if not ranked.empty else "-")
     metric_cols[3].metric("数据天数", len(df))
@@ -805,6 +808,19 @@ def _render_strict_runs(
         columns = ["continuity_label", "direction", "status", "start_date", "end_date", "days", "pct_change", "start_price", "end_price"]
         st.dataframe(format_display_dataframe(display_runs, columns), use_container_width=True, hide_index=True)
 
+    st.markdown("所选区间横向统计")
+    min_date = current_df["trade_date"].min().date()
+    max_date = current_df["trade_date"].max().date()
+    default_start = date_range[0] if isinstance(date_range, tuple) and len(date_range) == 2 else min_date
+    default_end = date_range[1] if isinstance(date_range, tuple) and len(date_range) == 2 else max_date
+    cross_interval = st.date_input(
+        "横向统计区间",
+        value=(default_start, default_end),
+        min_value=min_date,
+        max_value=max_date,
+        key=f"{group}_strict_cross_interval",
+    )
+
     frames = []
     for symbol in symbol_files:
         try:
@@ -815,8 +831,9 @@ def _render_strict_runs(
         return
 
     prices = pd.concat(frames, ignore_index=True)
-    summary = summarize_strict_runs(prices, pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1]))
-    st.markdown("所选区间横向统计")
+    if not isinstance(cross_interval, tuple) or len(cross_interval) != 2:
+        return
+    summary = summarize_strict_runs(prices, pd.Timestamp(cross_interval[0]), pd.Timestamp(cross_interval[1]))
     if summary.empty:
         st.info("所选区间内没有可统计的严格连续形态。")
         return
