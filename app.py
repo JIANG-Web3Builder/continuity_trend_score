@@ -61,6 +61,7 @@ DISPLAY_COLUMN_LABELS = {
     "continuity_label": "连续标签",
     "current_direction": "当前方向",
     "current_run_days": "当前连续天数",
+    "amplitude_pct": "振幅(%)",
     "longest_up_days": "最长连阳",
     "longest_down_days": "最长连阴",
     "longest_direction": "最长方向",
@@ -115,7 +116,7 @@ def detect_waves_for_mode(
     wave_mode: str,
     min_reversal: float | None = None,
     min_reversal_pct: float | None = None,
-    min_wave_days: int = 3,
+    min_wave_days: int = 5,
 ) -> pd.DataFrame:
     detector = detect_review_waves if wave_mode == WAVE_MODE_REVIEW else detect_waves
     return detector(
@@ -155,14 +156,33 @@ def filter_scored_waves_by_date(scored: pd.DataFrame, date_range) -> pd.DataFram
 
 
 def extend_latest_wave_for_chart(waves: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
-    """Return confirmed waves for chart shading without extending them into the open interval."""
+    """Return wave rows for chart shading without extending confirmed rows."""
     if waves.empty:
         return waves.copy()
 
-    display = waves.copy()
-    if "status" in display:
-        display = display[display["status"] == "confirmed"].copy()
-    return display.reset_index(drop=True)
+    return waves.copy().reset_index(drop=True)
+
+
+def chart_waves_for_display(
+    ranked_waves: pd.DataFrame,
+    open_wave: pd.Series | None,
+    direction: str = "全部",
+    level: str = "全部",
+) -> pd.DataFrame:
+    """Add the latest open wave to chart shading when it matches active filters."""
+    chart_waves = ranked_waves.copy()
+    if open_wave is None:
+        return chart_waves.reset_index(drop=True)
+    if direction in {"up", "down"} and open_wave.get("direction") != direction:
+        return chart_waves.reset_index(drop=True)
+    all_level_labels = {"全部", LEVEL_OPTIONS[0]}
+    if level not in all_level_labels and open_wave.get("level") != level:
+        return chart_waves.reset_index(drop=True)
+    if int(open_wave.get("days", 0) or 0) < 5:
+        return chart_waves.reset_index(drop=True)
+
+    open_frame = pd.DataFrame([open_wave.to_dict()])
+    return pd.concat([chart_waves, open_frame], ignore_index=True, sort=False)
 
 
 def wave_background_spans(waves: pd.DataFrame) -> list[dict[str, object]]:
@@ -301,6 +321,25 @@ def format_display_dataframe(df: pd.DataFrame, columns: list[str] | None = None)
     if "status" in display:
         display["status"] = display["status"].map(lambda value: STATUS_LABELS.get(value, value))
     return display.rename(columns={column: DISPLAY_COLUMN_LABELS.get(column, column) for column in display.columns})
+
+
+def strict_run_table_columns() -> list[str]:
+    return ["continuity_label", "start_date", "end_date", "days", "pct_change", "start_price", "end_price"]
+
+
+def strict_run_summary_table_columns() -> list[str]:
+    return [
+        "symbol",
+        "name",
+        "continuity_label",
+        "start_date",
+        "end_date",
+        "amplitude_pct",
+        "current_run_days",
+        "longest_up_days",
+        "longest_down_days",
+        "longest_days",
+    ]
 
 
 def strict_run_display_rows(runs: pd.DataFrame) -> pd.DataFrame:
@@ -550,7 +589,8 @@ def _render_asset_group(
         ranked = ranked.sort_values(sort_by, ascending=ascending).reset_index(drop=True)
 
     _render_summary_metrics(st, filtered_df, scored, ranked)
-    _render_price_chart(st, go, filtered_df, ranked, wave_mode)
+    chart_waves = chart_waves_for_display(ranked, open_wave, direction=direction, level=level)
+    _render_price_chart(st, go, filtered_df, chart_waves, wave_mode)
     if wave_mode == WAVE_MODE_ASOF:
         _render_open_wave(st, open_wave)
     else:
@@ -802,8 +842,7 @@ def _render_strict_runs(
     if display_runs.empty:
         st.info("当前日期范围内没有持续天数大于 3 的严格连阳或连阴段。")
     else:
-        columns = ["continuity_label", "direction", "status", "start_date", "end_date", "days", "pct_change", "start_price", "end_price"]
-        st.dataframe(format_display_dataframe(display_runs, columns), use_container_width=True, hide_index=True)
+        st.dataframe(format_display_dataframe(display_runs, strict_run_table_columns()), use_container_width=True, hide_index=True)
 
     frames = []
     for symbol in symbol_files:
@@ -822,20 +861,7 @@ def _render_strict_runs(
         return
 
     summary["name"] = summary["symbol"].map(lambda code: display_name(code, group))
-    columns = [
-        "symbol",
-        "name",
-        "continuity_label",
-        "start_date",
-        "end_date",
-        "current_direction",
-        "current_run_days",
-        "longest_up_days",
-        "longest_down_days",
-        "longest_direction",
-        "longest_days",
-    ]
-    st.dataframe(format_display_dataframe(summary, columns), use_container_width=True, hide_index=True)
+    st.dataframe(format_display_dataframe(summary, strict_run_summary_table_columns()), use_container_width=True, hide_index=True)
 
 
 def _format_dates(df: pd.DataFrame) -> pd.DataFrame:

@@ -137,6 +137,57 @@ def test_split_waves_for_display_keeps_open_wave_out_of_confirmed_history():
     assert open_wave["points"] == 6.0
 
 
+def test_chart_waves_for_display_includes_latest_open_wave_for_shading():
+    app = importlib.import_module("app")
+    ranked = pd.DataFrame(
+        {
+            "direction": ["up"],
+            "status": ["confirmed"],
+            "start_date": pd.to_datetime(["2024-01-01"]),
+            "end_date": pd.to_datetime(["2024-01-05"]),
+            "level": ["middle"],
+        }
+    )
+    open_wave = pd.Series(
+        {
+            "direction": "down",
+            "status": "open",
+            "start_date": pd.Timestamp("2024-01-05"),
+            "end_date": pd.Timestamp("2024-01-12"),
+            "level": "middle",
+            "days": 8,
+        }
+    )
+
+    chart_waves = app.chart_waves_for_display(ranked, open_wave, direction="全部", level="全部")
+
+    assert chart_waves["status"].tolist() == ["confirmed", "open"]
+    assert chart_waves.iloc[-1]["end_date"] == pd.Timestamp("2024-01-12")
+
+
+def test_extend_latest_wave_for_chart_keeps_open_wave_without_extending_confirmed_rows():
+    app = importlib.import_module("app")
+    prices = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2024-01-01", "2024-01-10", "2024-01-20"]),
+            "close": [100.0, 120.0, 116.0],
+        }
+    )
+    waves = pd.DataFrame(
+        {
+            "direction": ["up", "down"],
+            "start_date": pd.to_datetime(["2024-01-01", "2024-01-10"]),
+            "end_date": pd.to_datetime(["2024-01-10", "2024-01-20"]),
+            "status": ["confirmed", "open"],
+        }
+    )
+
+    display_waves = app.extend_latest_wave_for_chart(waves, prices)
+
+    assert display_waves["status"].tolist() == ["confirmed", "open"]
+    assert display_waves.loc[0, "end_date"] == pd.Timestamp("2024-01-10")
+
+
 def test_wave_background_spans_do_not_overlap_when_waves_overlap():
     app = importlib.import_module("app")
     waves = pd.DataFrame(
@@ -225,6 +276,7 @@ def test_format_display_dataframe_translates_strict_run_columns():
             "continuity_label": ["严格连阳"],
             "current_direction": ["up"],
             "current_run_days": [3],
+            "amplitude_pct": [6.25],
             "longest_up_days": [4],
             "longest_down_days": [2],
             "longest_direction": ["up"],
@@ -234,7 +286,40 @@ def test_format_display_dataframe_translates_strict_run_columns():
 
     display = app.format_display_dataframe(raw)
 
-    assert display.columns.tolist() == ["连续标签", "当前方向", "当前连续天数", "最长连阳", "最长连阴", "最长方向", "最长连续天数"]
+    assert display.columns.tolist() == [
+        "连续标签",
+        "当前方向",
+        "当前连续天数",
+        "振幅(%)",
+        "最长连阳",
+        "最长连阴",
+        "最长方向",
+        "最长连续天数",
+    ]
+
+
+def test_strict_run_table_columns_drop_redundant_direction_and_status():
+    app = importlib.import_module("app")
+
+    assert app.strict_run_table_columns() == [
+        "continuity_label",
+        "start_date",
+        "end_date",
+        "days",
+        "pct_change",
+        "start_price",
+        "end_price",
+    ]
+
+
+def test_strict_run_summary_table_columns_use_amplitude_instead_of_direction_columns():
+    app = importlib.import_module("app")
+
+    columns = app.strict_run_summary_table_columns()
+
+    assert "current_direction" not in columns
+    assert "longest_direction" not in columns
+    assert "amplitude_pct" in columns
 
 
 def test_strict_run_display_rows_keeps_full_history():

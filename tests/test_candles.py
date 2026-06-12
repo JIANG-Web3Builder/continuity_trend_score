@@ -127,3 +127,4 @@ def test_summarize_strict_runs_reports_current_and_longest_runs_by_interval():
     ]
     assert result.loc[0, "longest_direction"] == "down"
     assert result.loc[0, "longest_days"] == 3
+    assert result["amplitude_pct"].tolist() == [5.0, 8.0]

@@ -25,7 +25,7 @@ def price_frame(closes):
 def test_detect_waves_finds_reversals_above_minimum_threshold():
     df = price_frame([100, 105, 110, 107, 104, 115, 118, 116, 112])
 
-    waves = detect_waves(df, symbol="000001.SH", min_reversal=4)
+    waves = detect_waves(df, symbol="000001.SH", min_reversal=4, min_wave_days=1)
 
     confirmed = waves[waves["status"] == "confirmed"].reset_index(drop=True)
     assert confirmed[["direction", "start_price", "end_price", "points"]].to_dict("records") == [
@@ -41,7 +41,7 @@ def test_detect_waves_finds_reversals_above_minimum_threshold():
 def test_detect_waves_handles_monotonic_series_as_one_wave():
     df = price_frame([100, 103, 106, 110])
 
-    waves = detect_waves(df, symbol="000001.SH", min_reversal=4)
+    waves = detect_waves(df, symbol="000001.SH", min_reversal=4, min_wave_days=1)
 
     assert len(waves) == 1
     assert waves.loc[0, "direction"] == "up"
@@ -58,6 +58,26 @@ def test_detect_waves_filters_one_day_noise_reversals_by_default():
     assert confirmed[["direction", "start_price", "end_price", "days", "status"]].to_dict("records") == [
         {"direction": "up", "start_price": 100.0, "end_price": 116.0, "days": 5, "status": "confirmed"}
     ]
+
+
+def test_detect_waves_default_ignores_confirmed_waves_shorter_than_five_days():
+    df = price_frame([100, 105, 110, 107, 104, 114, 119, 118, 117])
+
+    waves = detect_waves(df, symbol="000001.SH", min_reversal=4)
+
+    confirmed = waves[waves["status"] == "confirmed"].reset_index(drop=True)
+    assert confirmed[["direction", "start_price", "end_price", "days"]].to_dict("records") == [
+        {"direction": "up", "start_price": 100.0, "end_price": 110.0, "days": 5},
+        {"direction": "down", "start_price": 110.0, "end_price": 104.0, "days": 5},
+    ]
+
+
+def test_detect_waves_default_ignores_open_waves_shorter_than_five_days():
+    df = price_frame([100, 105, 110, 107])
+
+    waves = detect_waves(df, symbol="000001.SH", min_reversal=4)
+
+    assert waves.empty
 
 
 def test_detect_waves_supports_percentage_reversal_threshold():
