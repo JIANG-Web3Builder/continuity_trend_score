@@ -43,16 +43,17 @@ def test_save_manifest_writes_asset_metadata(tmp_path):
 
 
 def test_build_wave_scores_supports_non_index_assets():
-    dates = pd.date_range("2024-01-01", periods=9, freq="D")
+    closes = [100, 102, 104, 106, 108, 110, 112, 114, 116, 118, 114, 112, 110, 108, 106, 104, 102, 100, 98, 96]
+    dates = pd.date_range("2024-01-01", periods=len(closes), freq="D")
     df = pd.DataFrame(
         {
             "ts_code": "886033.TI",
             "trade_date": dates,
-            "open": [100, 104, 108, 106, 102, 110, 118, 116, 112],
-            "high": [101, 105, 109, 107, 103, 111, 119, 117, 113],
-            "low": [99, 103, 107, 105, 101, 109, 117, 115, 111],
-            "close": [100, 104, 108, 106, 102, 110, 118, 116, 112],
-            "pre_close": [100, 100, 104, 108, 106, 102, 110, 118, 116],
+            "open": closes,
+            "high": [close + 1 for close in closes],
+            "low": [close - 1 for close in closes],
+            "close": closes,
+            "pre_close": [closes[0], *closes[:-1]],
             "change": 0.0,
             "pct_chg": 0.0,
             "vol": 1000.0,

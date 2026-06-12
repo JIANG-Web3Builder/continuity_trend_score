@@ -16,7 +16,7 @@ from trend_score.candles import STRICT_DOWN_LABEL, STRICT_UP_LABEL, detect_stric
 from trend_score.compare import compare_waves, rank_waves, score_interval_continuity
 from trend_score.data import available_symbol_files, display_name, load_symbol_data
 from trend_score.scoring import score_review_waves, score_waves
-from trend_score.waves import detect_review_waves, detect_waves
+from trend_score.waves import MIN_WAVE_DAYS, detect_review_waves, detect_waves
 
 
 DEFAULT_DATA_DIR = Path("data")
@@ -26,7 +26,6 @@ WAVE_MODE_OPTIONS = [WAVE_MODE_ASOF, WAVE_MODE_REVIEW]
 DIRECTION_LABELS = {"全部": "全部", "up": "上涨", "down": "下跌"}
 LEVEL_OPTIONS = ["全部", "小", "中", "大", "超大"]
 GROUP_ORDER = ["index", "sector", "commodity"]
-MIN_WAVE_DISPLAY_DAYS = 7
 ANALYSIS_TAB_LABELS = ["波段评分表", "单个波段详情", "波段对比", "区间横向对比", "连阴连阳识别"]
 UP_COLOR = "#d94b3d"
 DOWN_COLOR = "#16a37f"
@@ -117,7 +116,7 @@ def detect_waves_for_mode(
     wave_mode: str,
     min_reversal: float | None = None,
     min_reversal_pct: float | None = None,
-    min_wave_days: int = 5,
+    min_wave_days: int = MIN_WAVE_DAYS,
 ) -> pd.DataFrame:
     detector = detect_review_waves if wave_mode == WAVE_MODE_REVIEW else detect_waves
     return detector(
@@ -179,7 +178,7 @@ def chart_waves_for_display(
     all_level_labels = {"全部", LEVEL_OPTIONS[0]}
     if level not in all_level_labels and open_wave.get("level") != level:
         return chart_waves.reset_index(drop=True)
-    if int(open_wave.get("days", 0) or 0) < 5:
+    if int(open_wave.get("days", 0) or 0) < MIN_WAVE_DAYS:
         return chart_waves.reset_index(drop=True)
 
     open_frame = pd.DataFrame([open_wave.to_dict()])
@@ -199,6 +198,9 @@ def wave_background_spans(waves: pd.DataFrame) -> list[dict[str, object]]:
     ordered["start_date"] = pd.to_datetime(ordered["start_date"], errors="coerce")
     ordered["end_date"] = pd.to_datetime(ordered["end_date"], errors="coerce")
     ordered = ordered.dropna(subset=["start_date", "end_date"]).sort_values(["start_date", "end_date"])
+    if "days" in ordered.columns:
+        days = pd.to_numeric(ordered["days"], errors="coerce").fillna(0)
+        ordered = ordered.loc[days >= MIN_WAVE_DAYS]
     spans: list[dict[str, object]] = []
     rows = list(ordered.iterrows())
     for position, (_, wave) in enumerate(rows):
@@ -341,6 +343,32 @@ def strict_run_summary_table_columns() -> list[str]:
         "longest_down_days",
         "longest_days",
     ]
+
+
+def strict_run_summary_interval(st, prices: pd.DataFrame, default_date_range, key: str):
+    if prices.empty or "trade_date" not in prices:
+        return None
+    trade_dates = pd.to_datetime(prices["trade_date"], errors="coerce")
+    if trade_dates.isna().all():
+        return None
+    min_date = trade_dates.min().date()
+    max_date = trade_dates.max().date()
+    value = (min_date, max_date)
+    if isinstance(default_date_range, tuple) and len(default_date_range) == 2:
+        start = max(pd.Timestamp(default_date_range[0]).date(), min_date)
+        end = min(pd.Timestamp(default_date_range[1]).date(), max_date)
+        if start <= end:
+            value = (start, end)
+    interval = st.date_input(
+        "横向统计区间",
+        value=value,
+        min_value=min_date,
+        max_value=max_date,
+        key=key,
+    )
+    if not isinstance(interval, tuple) or len(interval) != 2:
+        return None
+    return pd.Timestamp(interval[0]), pd.Timestamp(interval[1])
 
 
 def strict_run_display_rows(runs: pd.DataFrame) -> pd.DataFrame:
@@ -588,8 +616,6 @@ def _render_asset_group(
     if not ranked.empty:
         ascending = sort_by == "end_date"
         ranked = ranked.sort_values(sort_by, ascending=ascending).reset_index(drop=True)
-    if not ranked.empty and "days" in ranked.columns:
-        ranked = ranked[ranked["days"] >= MIN_WAVE_DISPLAY_DAYS].reset_index(drop=True)
 
     _render_summary_metrics(st, filtered_df, scored, ranked)
     chart_waves = chart_waves_for_display(ranked, open_wave, direction=direction, level=level)
@@ -847,19 +873,6 @@ def _render_strict_runs(
     else:
         st.dataframe(format_display_dataframe(display_runs, strict_run_table_columns()), use_container_width=True, hide_index=True)
 
-    st.markdown("所选区间横向统计")
-    min_date = current_df["trade_date"].min().date()
-    max_date = current_df["trade_date"].max().date()
-    default_start = date_range[0] if isinstance(date_range, tuple) and len(date_range) == 2 else min_date
-    default_end = date_range[1] if isinstance(date_range, tuple) and len(date_range) == 2 else max_date
-    cross_interval = st.date_input(
-        "横向统计区间",
-        value=(default_start, default_end),
-        min_value=min_date,
-        max_value=max_date,
-        key=f"{group}_strict_cross_interval",
-    )
-
     frames = []
     for symbol in symbol_files:
         try:
@@ -870,9 +883,17 @@ def _render_strict_runs(
         return
 
     prices = pd.concat(frames, ignore_index=True)
-    if not isinstance(cross_interval, tuple) or len(cross_interval) != 2:
+    summary_interval = strict_run_summary_interval(
+        st,
+        prices,
+        date_range,
+        key=f"{group}_strict_summary_interval",
+    )
+    if summary_interval is None:
         return
-    summary = summarize_strict_runs(prices, pd.Timestamp(cross_interval[0]), pd.Timestamp(cross_interval[1]))
+
+    summary = summarize_strict_runs(prices, summary_interval[0], summary_interval[1])
+    st.markdown("所选区间横向统计")
     if summary.empty:
         st.info("所选区间内没有可统计的严格连续形态。")
         return

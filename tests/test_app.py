@@ -91,6 +91,30 @@ def test_detect_waves_for_mode_switches_between_asof_and_review_dates():
     assert set(review["status"]) == {"confirmed"}
 
 
+def test_detect_waves_for_mode_default_filters_scored_waves_shorter_than_minimum():
+    app = importlib.import_module("app")
+    dates = pd.date_range("2024-01-01", periods=10, freq="D")
+    prices = pd.DataFrame(
+        {
+            "ts_code": "000001.SH",
+            "trade_date": dates,
+            "open": [100, 102, 104, 106, 108, 110, 112, 114, 116, 112],
+            "high": [101, 103, 105, 107, 109, 111, 113, 115, 117, 113],
+            "low": [99, 101, 103, 105, 107, 109, 111, 113, 115, 111],
+            "close": [100, 102, 104, 106, 108, 110, 112, 114, 116, 112],
+            "pre_close": [100, 100, 102, 104, 106, 108, 110, 112, 114, 116],
+            "vol": [1000] * 10,
+        }
+    )
+
+    waves = app.detect_waves_for_mode(prices, "000001.SH", app.WAVE_MODE_OPTIONS[0], min_reversal=4)
+    confirmed, _open_wave = app.split_waves_for_display(waves)
+    scored = app.score_waves_for_mode(prices, confirmed, app.WAVE_MODE_OPTIONS[0])
+
+    assert app.MIN_WAVE_DAYS == 10
+    assert scored["days"].tolist() == [10]
+
+
 def test_extend_latest_wave_for_chart_does_not_extend_confirmed_wave_to_latest_date():
     app = importlib.import_module("app")
     prices = pd.DataFrame(
@@ -155,7 +179,7 @@ def test_chart_waves_for_display_includes_latest_open_wave_for_shading():
             "start_date": pd.Timestamp("2024-01-05"),
             "end_date": pd.Timestamp("2024-01-12"),
             "level": "middle",
-            "days": 8,
+            "days": 10,
         }
     )
 
@@ -163,6 +187,33 @@ def test_chart_waves_for_display_includes_latest_open_wave_for_shading():
 
     assert chart_waves["status"].tolist() == ["confirmed", "open"]
     assert chart_waves.iloc[-1]["end_date"] == pd.Timestamp("2024-01-12")
+
+
+def test_chart_waves_for_display_excludes_latest_open_wave_shorter_than_minimum():
+    app = importlib.import_module("app")
+    ranked = pd.DataFrame(
+        {
+            "direction": ["up"],
+            "status": ["confirmed"],
+            "start_date": pd.to_datetime(["2024-01-01"]),
+            "end_date": pd.to_datetime(["2024-01-10"]),
+            "level": ["middle"],
+        }
+    )
+    open_wave = pd.Series(
+        {
+            "direction": "down",
+            "status": "open",
+            "start_date": pd.Timestamp("2024-01-10"),
+            "end_date": pd.Timestamp("2024-01-18"),
+            "level": "middle",
+            "days": 9,
+        }
+    )
+
+    chart_waves = app.chart_waves_for_display(ranked, open_wave, direction="全部", level="全部")
+
+    assert chart_waves["status"].tolist() == ["confirmed"]
 
 
 def test_extend_latest_wave_for_chart_keeps_open_wave_without_extending_confirmed_rows():
@@ -204,6 +255,24 @@ def test_wave_background_spans_do_not_overlap_when_waves_overlap():
         (pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-04"), "up"),
         (pd.Timestamp("2026-01-04"), pd.Timestamp("2026-01-10"), "down"),
         (pd.Timestamp("2026-01-10"), pd.Timestamp("2026-01-15"), "up"),
+    ]
+
+
+def test_wave_background_spans_exclude_waves_shorter_than_minimum():
+    app = importlib.import_module("app")
+    waves = pd.DataFrame(
+        {
+            "direction": ["up", "down"],
+            "start_date": pd.to_datetime(["2026-01-01", "2026-01-12"]),
+            "end_date": pd.to_datetime(["2026-01-09", "2026-01-25"]),
+            "days": [9, 14],
+        }
+    )
+
+    spans = app.wave_background_spans(waves)
+
+    assert [(span["x0"], span["x1"], span["direction"]) for span in spans] == [
+        (pd.Timestamp("2026-01-12"), pd.Timestamp("2026-01-25"), "down"),
     ]
 
 
@@ -320,6 +389,34 @@ def test_strict_run_summary_table_columns_use_amplitude_instead_of_direction_col
     assert "current_direction" not in columns
     assert "longest_direction" not in columns
     assert "amplitude_pct" in columns
+
+
+def test_strict_run_summary_interval_uses_visible_local_date_picker():
+    app = importlib.import_module("app")
+
+    class FakeStreamlit:
+        def __init__(self):
+            self.kwargs = None
+
+        def date_input(self, _label, **kwargs):
+            self.kwargs = kwargs
+            return (pd.Timestamp("2024-01-03").date(), pd.Timestamp("2024-01-06").date())
+
+    prices = pd.DataFrame({"trade_date": pd.date_range("2024-01-01", periods=10, freq="D")})
+    fake_st = FakeStreamlit()
+
+    interval = app.strict_run_summary_interval(
+        fake_st,
+        prices,
+        (pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-09")),
+        key="strict_summary_interval",
+    )
+
+    assert interval == (pd.Timestamp("2024-01-03"), pd.Timestamp("2024-01-06"))
+    assert fake_st.kwargs["value"] == (pd.Timestamp("2024-01-02").date(), pd.Timestamp("2024-01-09").date())
+    assert fake_st.kwargs["min_value"] == pd.Timestamp("2024-01-01").date()
+    assert fake_st.kwargs["max_value"] == pd.Timestamp("2024-01-10").date()
+    assert fake_st.kwargs["key"] == "strict_summary_interval"
 
 
 def test_strict_run_display_rows_keeps_full_history():

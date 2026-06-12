@@ -4,6 +4,9 @@ from docx import Document
 from scripts.generate_word_report import collect_report_data, generate_report
 
 
+REPORT_CLOSES = [100, 104, 108, 110, 109, 108, 107, 106, 105, 104, 103, 112, 118, 122, 120, 118, 116, 114, 112, 110, 109, 120, 128, 136]
+
+
 def _write_symbol_csv(root, group, symbol, closes):
     group_dir = root / group
     group_dir.mkdir(parents=True, exist_ok=True)
@@ -27,9 +30,9 @@ def _write_symbol_csv(root, group, symbol, closes):
 
 
 def test_generate_word_report_creates_docx_and_chart_assets(tmp_path):
-    _write_symbol_csv(tmp_path, "index", "000001.SH", [100, 104, 108, 102, 96, 106, 116, 110, 104, 120, 132])
-    _write_symbol_csv(tmp_path, "sector", "BK1128.DC", [100, 106, 114, 109, 102, 116, 135, 128, 119, 141, 165])
-    _write_symbol_csv(tmp_path, "commodity", "AUL.SHF", [100, 101, 103, 102, 101, 106, 112, 110, 108, 116, 122])
+    _write_symbol_csv(tmp_path, "index", "000001.SH", REPORT_CLOSES)
+    _write_symbol_csv(tmp_path, "sector", "BK1128.DC", [round(value * (1 + 0.01 * (index % 5)), 2) for index, value in enumerate(REPORT_CLOSES)])
+    _write_symbol_csv(tmp_path, "commodity", "AUL.SHF", [round(value * (0.95 + 0.005 * index), 2) for index, value in enumerate(REPORT_CLOSES)])
 
     output_path = tmp_path / "report.docx"
     chart_dir = tmp_path / "assets"
@@ -55,9 +58,9 @@ def test_generate_word_report_creates_docx_and_chart_assets(tmp_path):
 
 
 def test_collect_report_data_contains_research_analysis_layers(tmp_path):
-    _write_symbol_csv(tmp_path, "index", "000001.SH", [100, 104, 108, 102, 96, 106, 116, 110, 104, 120, 132])
-    _write_symbol_csv(tmp_path, "sector", "BK1128.DC", [100, 106, 114, 109, 102, 116, 135, 128, 119, 141, 165])
-    _write_symbol_csv(tmp_path, "commodity", "AUL.SHF", [100, 101, 103, 102, 101, 106, 112, 110, 108, 116, 122])
+    _write_symbol_csv(tmp_path, "index", "000001.SH", REPORT_CLOSES)
+    _write_symbol_csv(tmp_path, "sector", "BK1128.DC", [round(value * (1 + 0.01 * (index % 5)), 2) for index, value in enumerate(REPORT_CLOSES)])
+    _write_symbol_csv(tmp_path, "commodity", "AUL.SHF", [round(value * (0.95 + 0.005 * index), 2) for index, value in enumerate(REPORT_CLOSES)])
 
     analysis = collect_report_data(tmp_path)
 
