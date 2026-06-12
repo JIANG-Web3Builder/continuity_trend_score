@@ -16,7 +16,7 @@ from trend_score.candles import STRICT_DOWN_LABEL, STRICT_UP_LABEL, detect_stric
 from trend_score.compare import compare_waves, rank_waves, score_interval_continuity
 from trend_score.data import available_symbol_files, display_name, load_symbol_data
 from trend_score.scoring import score_review_waves, score_waves
-from trend_score.waves import MIN_WAVE_DAYS, detect_review_waves, detect_waves
+from trend_score.waves import detect_review_waves, detect_waves
 
 
 DEFAULT_DATA_DIR = Path("data")
@@ -26,6 +26,7 @@ WAVE_MODE_OPTIONS = [WAVE_MODE_ASOF, WAVE_MODE_REVIEW]
 DIRECTION_LABELS = {"全部": "全部", "up": "上涨", "down": "下跌"}
 LEVEL_OPTIONS = ["全部", "小", "中", "大", "超大"]
 GROUP_ORDER = ["index", "sector", "commodity"]
+MIN_WAVE_DAYS = 10
 ANALYSIS_TAB_LABELS = ["波段评分表", "单个波段详情", "波段对比", "区间横向对比", "连阴连阳识别"]
 UP_COLOR = "#d94b3d"
 DOWN_COLOR = "#16a37f"
