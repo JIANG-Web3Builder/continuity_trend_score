@@ -1,6 +1,11 @@
 import importlib
+from pathlib import Path
 
 import pandas as pd
+
+
+def app_source_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "app.py"
 
 
 def make_price_frame():
@@ -21,6 +26,12 @@ def test_app_import_does_not_require_streamlit_dependency():
     app = importlib.import_module("app")
 
     assert hasattr(app, "run_dashboard")
+
+
+def test_app_does_not_import_wave_day_constant_from_waves_module():
+    source = app_source_path().read_text(encoding="utf-8")
+
+    assert "from trend_score.waves import MIN_WAVE_DAYS" not in source
 
 
 def test_filter_scored_waves_by_date_preserves_precomputed_scores():
