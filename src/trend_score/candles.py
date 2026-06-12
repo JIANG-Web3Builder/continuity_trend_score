@@ -26,6 +26,7 @@ STRICT_RUN_SUMMARY_COLUMNS = [
     "continuity_label",
     "start_date",
     "end_date",
+    "amplitude_pct",
     "current_direction",
     "current_run_days",
     "longest_up_days",
@@ -102,6 +103,7 @@ def summarize_strict_runs(
                 "continuity_label": _non_strict_label(segment),
                 "start_date": segment.iloc[0]["trade_date"],
                 "end_date": segment.iloc[-1]["trade_date"],
+                "amplitude_pct": _amplitude_pct(segment),
                 "current_direction": current["direction"] if current is not None else "",
                 "current_run_days": int(current["days"]) if current is not None else 0,
                 "longest_up_days": longest_up,
@@ -272,6 +274,15 @@ def _non_strict_label(segment: pd.DataFrame) -> str:
     if last_close < first_close:
         return NON_STRICT_DOWN_LABEL
     return "none"
+
+
+def _amplitude_pct(segment: pd.DataFrame) -> float:
+    base = float(segment.iloc[0]["close"])
+    if base == 0:
+        return 0.0
+    high = float(segment["high"].max()) if "high" in segment else float(segment["close"].max())
+    low = float(segment["low"].min()) if "low" in segment else float(segment["close"].min())
+    return round((high - low) / base * 100.0, 6)
 
 
 def _empty_strict_runs() -> pd.DataFrame:

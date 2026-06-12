@@ -13,7 +13,7 @@ def detect_waves(
     min_reversal: float | None = None,
     min_reversal_pct: float | None = None,
     atr_multiplier: float = 1.2,
-    min_wave_days: int = 3,
+    min_wave_days: int = 5,
 ) -> pd.DataFrame:
     """Detect directional waves as they become confirmable from visible prices."""
     if prices.empty:
@@ -44,7 +44,7 @@ def detect_review_waves(
     min_reversal: float | None = None,
     min_reversal_pct: float | None = None,
     atr_multiplier: float = 1.2,
-    min_wave_days: int = 3,
+    min_wave_days: int = 5,
 ) -> pd.DataFrame:
     """Detect hindsight ZigZag waves for review/backtest-style analysis."""
     if prices.empty:
@@ -182,7 +182,7 @@ def _asof_zigzag_waves(
                 extreme_idx = idx
                 extreme_price = price
             elif _down_move_reaches(extreme_price, price, active_threshold, min_reversal_pct):
-                if _has_min_wave_days(pivot_idx, extreme_idx, min_wave_days):
+                if _has_min_wave_days(pivot_idx, idx, min_wave_days):
                     rows.append(
                         _wave_row(
                             df,
@@ -206,7 +206,7 @@ def _asof_zigzag_waves(
                 extreme_idx = idx
                 extreme_price = price
             elif _up_move_reaches(extreme_price, price, active_threshold, min_reversal_pct):
-                if _has_min_wave_days(pivot_idx, extreme_idx, min_wave_days):
+                if _has_min_wave_days(pivot_idx, idx, min_wave_days):
                     rows.append(
                         _wave_row(
                             df,
@@ -231,7 +231,7 @@ def _asof_zigzag_waves(
         if latest_idx != pivot_idx and float(prices[latest_idx]) != pivot_price:
             trend = "up" if float(prices[latest_idx]) > pivot_price else "down"
             extreme_idx = latest_idx
-    if trend is not None and latest_idx != pivot_idx:
+    if trend is not None and latest_idx != pivot_idx and _has_min_wave_days(pivot_idx, latest_idx, min_wave_days):
         rows.append(
             _wave_row(
                 df,
