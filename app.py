@@ -625,7 +625,7 @@ def _render_asset_group(
         [
             (ANALYSIS_TAB_LABELS[0], lambda: _render_score_table(st, ranked)),
             (ANALYSIS_TAB_LABELS[1], lambda: _render_wave_detail(st, go, ranked)),
-            (ANALYSIS_TAB_LABELS[2], lambda: _render_wave_compare(st, px, df, scored)),
+            (ANALYSIS_TAB_LABELS[2], lambda: _render_wave_compare(st, px, df, ranked)),
             (ANALYSIS_TAB_LABELS[3], lambda: _render_interval_continuity(st, px, data_dir, group, symbol_files)),
             (ANALYSIS_TAB_LABELS[4], lambda: _render_strict_runs(st, data_dir, group, symbol_files, df, date_range)),
         ],
@@ -641,7 +641,7 @@ def _filter_by_date(df: pd.DataFrame, date_range) -> pd.DataFrame:
 
 def _render_summary_metrics(st, df: pd.DataFrame, scored: pd.DataFrame, ranked: pd.DataFrame) -> None:
     metric_cols = st.columns(4)
-    metric_cols[0].metric("识别波段", len(scored))
+    metric_cols[0].metric("检测波段", len(scored))
     metric_cols[1].metric("筛选后", len(ranked))
     metric_cols[2].metric("最高分", f"{ranked['total_score'].max():.1f}" if not ranked.empty else "-")
     metric_cols[3].metric("数据天数", len(df))
