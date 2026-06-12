@@ -5,6 +5,7 @@ import pandas as pd
 
 
 LEVEL_LABELS = ("小", "中", "大", "超大")
+MIN_WAVE_DAYS = 10
 
 
 def detect_waves(
@@ -13,7 +14,7 @@ def detect_waves(
     min_reversal: float | None = None,
     min_reversal_pct: float | None = None,
     atr_multiplier: float = 1.2,
-    min_wave_days: int = 5,
+    min_wave_days: int = MIN_WAVE_DAYS,
 ) -> pd.DataFrame:
     """Detect directional waves as they become confirmable from visible prices."""
     if prices.empty:
@@ -44,7 +45,7 @@ def detect_review_waves(
     min_reversal: float | None = None,
     min_reversal_pct: float | None = None,
     atr_multiplier: float = 1.2,
-    min_wave_days: int = 5,
+    min_wave_days: int = MIN_WAVE_DAYS,
 ) -> pd.DataFrame:
     """Detect hindsight ZigZag waves for review/backtest-style analysis."""
     if prices.empty:
@@ -57,17 +58,20 @@ def detect_review_waves(
     if threshold is None and threshold_pct is None:
         threshold = max(_adaptive_reversal_threshold(df, atr_multiplier), 0.0)
 
+    min_wave_days = max(int(min_wave_days), 1)
     pivots = _zigzag_pivots(
         df["close"].astype(float).to_numpy(),
         threshold,
         min_reversal_pct=threshold_pct,
-        min_wave_days=min_wave_days,
+        min_wave_days=1,
     )
     if len(pivots) < 2:
         return _empty_waves()
 
     rows = []
     for start_idx, end_idx in zip(pivots[:-1], pivots[1:]):
+        if not _has_min_wave_days(start_idx, end_idx, min_wave_days):
+            continue
         start_price = float(df.loc[start_idx, "close"])
         end_price = float(df.loc[end_idx, "close"])
         delta = end_price - start_price
@@ -196,11 +200,11 @@ def _asof_zigzag_waves(
                             min_reversal_pct=min_reversal_pct,
                         )
                     )
-                    pivot_idx = extreme_idx
-                    pivot_price = extreme_price
-                    trend = "down"
-                    extreme_idx = idx
-                    extreme_price = price
+                pivot_idx = extreme_idx
+                pivot_price = extreme_price
+                trend = "down"
+                extreme_idx = idx
+                extreme_price = price
         else:
             if price < extreme_price:
                 extreme_idx = idx
@@ -220,11 +224,11 @@ def _asof_zigzag_waves(
                             min_reversal_pct=min_reversal_pct,
                         )
                     )
-                    pivot_idx = extreme_idx
-                    pivot_price = extreme_price
-                    trend = "up"
-                    extreme_idx = idx
-                    extreme_price = price
+                pivot_idx = extreme_idx
+                pivot_price = extreme_price
+                trend = "up"
+                extreme_idx = idx
+                extreme_price = price
 
     latest_idx = len(prices) - 1
     if trend is None:
