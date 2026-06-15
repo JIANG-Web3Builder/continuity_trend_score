@@ -12,7 +12,14 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from trend_score.catalog import ASSET_GROUPS, asset_options, get_assets
-from trend_score.candles import STRICT_DOWN_LABEL, STRICT_UP_LABEL, detect_strict_runs, summarize_strict_runs
+from trend_score.candles import label_wave_continuity
+from trend_score.streaks import (
+    STREAK_DOWN_LABEL,
+    STREAK_UP_LABEL,
+    detect_strict_streaks,
+    score_streak_win_rates,
+    streak_signal_outcomes,
+)
 from trend_score.compare import compare_waves, rank_waves, score_interval_continuity
 from trend_score.data import available_symbol_files, display_name, load_symbol_data
 from trend_score.scoring import score_review_waves, score_waves
@@ -20,14 +27,17 @@ from trend_score.waves import detect_review_waves, detect_waves
 
 
 DEFAULT_DATA_DIR = Path("data")
-WAVE_MODE_ASOF = "无未来函数模式"
-WAVE_MODE_REVIEW = "复盘模式"
-WAVE_MODE_OPTIONS = [WAVE_MODE_ASOF, WAVE_MODE_REVIEW]
+CONTINUITY_TYPE_INTERVAL = "区间连续性"
+CONTINUITY_TYPE_STREAK = "连阳连阴连续性"
+CONTINUITY_TYPE_OPTIONS = [CONTINUITY_TYPE_INTERVAL, CONTINUITY_TYPE_STREAK]
 DIRECTION_LABELS = {"全部": "全部", "up": "上涨", "down": "下跌"}
 LEVEL_OPTIONS = ["全部", "小", "中", "大", "超大"]
 GROUP_ORDER = ["index", "sector", "commodity"]
 MIN_WAVE_DAYS = 10
-ANALYSIS_TAB_LABELS = ["波段评分表", "单个波段详情", "波段对比", "区间横向对比", "连阴连阳识别"]
+INTERVAL_ANALYSIS_TAB_LABELS = ["波段评分表", "单个波段详情", "波段对比", "区间横向对比"]
+STREAK_ANALYSIS_TAB_LABELS = [*INTERVAL_ANALYSIS_TAB_LABELS, "胜率统计"]
+STREAK_CONTINUITY_LABELS = {STREAK_UP_LABEL, STREAK_DOWN_LABEL}
+STREAK_WIN_RATE_HORIZONS = (1, 3, 5, 10)
 UP_COLOR = "#d94b3d"
 DOWN_COLOR = "#16a37f"
 UP_BAND = "rgba(217, 75, 61, 0.10)"
@@ -44,7 +54,6 @@ DISPLAY_COLUMN_LABELS = {
     "start_date": "起始日期",
     "end_date": "结束日期",
     "extreme_date": "极值日期",
-    "confirmation_date": "确认日期",
     "trade_date": "交易日期",
     "start_price": "起点价格",
     "end_price": "终点价格",
@@ -67,6 +76,15 @@ DISPLAY_COLUMN_LABELS = {
     "longest_down_days": "最长连阴",
     "longest_direction": "最长方向",
     "longest_days": "最长连续天数",
+    "streak_days": "连续天数",
+    "trigger_rule": "触发条件",
+    "total_signals": "样本数",
+    "latest_start_date": "最近起始时间",
+    "latest_end_date": "最近结束时间",
+    "latest_streak_days": "最近连续天数",
+    "start_time": "起始时间",
+    "end_time": "结束时间",
+    "end_close": "结束收盘价",
     "total_score": "总分",
     "historical_percentile": "历史分位(%)",
     "interval_score": "区间评分",
@@ -78,6 +96,22 @@ DISPLAY_COLUMN_LABELS = {
     "volume_score": "量能配合分",
     "consistency_score": "方向一致性分",
 }
+for _horizon in STREAK_WIN_RATE_HORIZONS:
+    DISPLAY_COLUMN_LABELS.update(
+        {
+            f"signals_{_horizon}d": f"{_horizon}日有效样本数",
+            f"up_count_{_horizon}d": f"{_horizon}日上涨次数",
+            f"down_count_{_horizon}d": f"{_horizon}日下跌次数",
+            f"flat_count_{_horizon}d": f"{_horizon}日持平次数",
+            f"up_rate_{_horizon}d": f"{_horizon}日上涨占比(%)",
+            f"down_rate_{_horizon}d": f"{_horizon}日下跌占比(%)",
+            f"avg_return_{_horizon}d": f"{_horizon}日平均涨跌幅(%)",
+            f"median_return_{_horizon}d": f"{_horizon}日中位涨跌幅(%)",
+            f"best_return_{_horizon}d": f"{_horizon}日最大涨幅(%)",
+            f"worst_return_{_horizon}d": f"{_horizon}日最大跌幅(%)",
+            f"return_{_horizon}d": f"{_horizon}日涨跌幅(%)",
+        }
+    )
 STATUS_LABELS = {"confirmed": "已确认", "open": "未完成"}
 SORT_LABELS = {
     "total_score": "总分",
@@ -111,27 +145,50 @@ def build_wave_scores(
     return score_waves(df, waves)
 
 
-def detect_waves_for_mode(
+def detect_interval_waves(
     df: pd.DataFrame,
     symbol: str,
-    wave_mode: str,
     min_reversal: float | None = None,
     min_reversal_pct: float | None = None,
     min_wave_days: int = MIN_WAVE_DAYS,
 ) -> pd.DataFrame:
-    detector = detect_review_waves if wave_mode == WAVE_MODE_REVIEW else detect_waves
-    return detector(
+    review_waves = detect_review_waves(
         df,
         symbol=symbol,
         min_reversal=min_reversal,
         min_reversal_pct=min_reversal_pct,
         min_wave_days=min_wave_days,
     )
+    asof_waves = detect_waves(
+        df,
+        symbol=symbol,
+        min_reversal=min_reversal,
+        min_reversal_pct=min_reversal_pct,
+        min_wave_days=min_wave_days,
+    )
+    _asof_confirmed, open_wave = split_waves_for_display(asof_waves)
+    if open_wave is None:
+        return review_waves
+
+    open_start = pd.Timestamp(open_wave["start_date"])
+    historical = review_waves[
+        (review_waves["status"] == "confirmed")
+        & (pd.to_datetime(review_waves["end_date"], errors="coerce") <= open_start)
+    ].copy()
+    return pd.concat([historical, open_wave.to_frame().T], ignore_index=True)
 
 
-def score_waves_for_mode(df: pd.DataFrame, waves: pd.DataFrame, wave_mode: str) -> pd.DataFrame:
-    scorer = score_review_waves if wave_mode == WAVE_MODE_REVIEW else score_waves
-    return scorer(df, waves)
+def score_interval_waves(df: pd.DataFrame, waves: pd.DataFrame) -> pd.DataFrame:
+    return score_review_waves(df, waves)
+
+
+def detect_streak_waves(df: pd.DataFrame, min_days: int = 3) -> pd.DataFrame:
+    streaks = detect_strict_streaks(df, min_days=min_days)
+    if streaks.empty:
+        return streaks
+    result = streaks.copy()
+    result["points"] = (result["end_price"].astype(float) - result["start_price"].astype(float)).abs()
+    return result
 
 
 def split_waves_for_display(waves: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series | None]:
@@ -169,6 +226,7 @@ def chart_waves_for_display(
     open_wave: pd.Series | None,
     direction: str = "全部",
     level: str = "全部",
+    min_wave_days: int = MIN_WAVE_DAYS,
 ) -> pd.DataFrame:
     """Add the latest open wave to chart shading when it matches active filters."""
     chart_waves = ranked_waves.copy()
@@ -179,14 +237,16 @@ def chart_waves_for_display(
     all_level_labels = {"全部", LEVEL_OPTIONS[0]}
     if level not in all_level_labels and open_wave.get("level") != level:
         return chart_waves.reset_index(drop=True)
-    if int(open_wave.get("days", 0) or 0) < MIN_WAVE_DAYS:
+    if int(open_wave.get("days", 0) or 0) < min_wave_days:
         return chart_waves.reset_index(drop=True)
 
     open_frame = pd.DataFrame([open_wave.to_dict()])
+    if chart_waves.empty:
+        return open_frame.reset_index(drop=True)
     return pd.concat([chart_waves, open_frame], ignore_index=True, sort=False)
 
 
-def wave_background_spans(waves: pd.DataFrame) -> list[dict[str, object]]:
+def wave_background_spans(waves: pd.DataFrame, min_wave_days: int = MIN_WAVE_DAYS) -> list[dict[str, object]]:
     """Return non-overlapping wave background spans ordered by start date."""
     if waves.empty:
         return []
@@ -201,7 +261,7 @@ def wave_background_spans(waves: pd.DataFrame) -> list[dict[str, object]]:
     ordered = ordered.dropna(subset=["start_date", "end_date"]).sort_values(["start_date", "end_date"])
     if "days" in ordered.columns:
         days = pd.to_numeric(ordered["days"], errors="coerce").fillna(0)
-        ordered = ordered.loc[days >= MIN_WAVE_DAYS]
+        ordered = ordered.loc[days >= min_wave_days]
     spans: list[dict[str, object]] = []
     rows = list(ordered.iterrows())
     for position, (_, wave) in enumerate(rows):
@@ -217,7 +277,13 @@ def wave_background_spans(waves: pd.DataFrame) -> list[dict[str, object]]:
     return spans
 
 
-def build_price_volume_figure(go, df: pd.DataFrame, waves: pd.DataFrame, title: str = "K线与波段区间"):
+def build_price_volume_figure(
+    go,
+    df: pd.DataFrame,
+    waves: pd.DataFrame,
+    title: str = "K线与波段区间",
+    min_wave_days: int = MIN_WAVE_DAYS,
+):
     """Build the main price workspace with K-line, volume, wave bands, and range slider."""
     from plotly.subplots import make_subplots
 
@@ -253,7 +319,7 @@ def build_price_volume_figure(go, df: pd.DataFrame, waves: pd.DataFrame, title: 
         row=2,
         col=1,
     )
-    for span in wave_background_spans(waves):
+    for span in wave_background_spans(waves, min_wave_days=min_wave_days):
         color = UP_BAND if span["direction"] == "up" else DOWN_BAND
         fig.add_vrect(
             x0=span["x0"],
@@ -327,60 +393,35 @@ def format_display_dataframe(df: pd.DataFrame, columns: list[str] | None = None)
     return display.rename(columns={column: DISPLAY_COLUMN_LABELS.get(column, column) for column in display.columns})
 
 
-def strict_run_table_columns() -> list[str]:
-    return ["continuity_label", "start_date", "end_date", "days", "pct_change", "start_price", "end_price"]
+def filter_waves_by_continuity(waves: pd.DataFrame, labels: set[str] | None = None) -> pd.DataFrame:
+    if labels is None or waves.empty or "continuity_label" not in waves:
+        return waves.copy()
+    return waves[waves["continuity_label"].isin(labels)].reset_index(drop=True)
 
 
-def strict_run_summary_table_columns() -> list[str]:
-    return [
-        "symbol",
-        "name",
-        "continuity_label",
-        "start_date",
-        "end_date",
-        "amplitude_pct",
-        "current_run_days",
-        "longest_up_days",
-        "longest_down_days",
-        "longest_days",
-    ]
-
-
-def strict_run_summary_interval(st, prices: pd.DataFrame, default_date_range, key: str):
-    if prices.empty or "trade_date" not in prices:
+def filter_open_wave_by_continuity(
+    prices: pd.DataFrame,
+    open_wave: pd.Series | None,
+    labels: set[str] | None = None,
+) -> pd.Series | None:
+    if labels is None or open_wave is None:
+        return open_wave
+    segment = _wave_price_segment(prices, open_wave)
+    label = label_wave_continuity(segment, str(open_wave["direction"]))
+    if label not in labels:
         return None
-    trade_dates = pd.to_datetime(prices["trade_date"], errors="coerce")
-    if trade_dates.isna().all():
-        return None
-    min_date = trade_dates.min().date()
-    max_date = trade_dates.max().date()
-    value = (min_date, max_date)
-    if isinstance(default_date_range, tuple) and len(default_date_range) == 2:
-        start = max(pd.Timestamp(default_date_range[0]).date(), min_date)
-        end = min(pd.Timestamp(default_date_range[1]).date(), max_date)
-        if start <= end:
-            value = (start, end)
-    interval = st.date_input(
-        "横向统计区间",
-        value=value,
-        min_value=min_date,
-        max_value=max_date,
-        key=key,
+    result = open_wave.copy()
+    result["continuity_label"] = label
+    return result
+
+
+def _wave_price_segment(prices: pd.DataFrame, wave: pd.Series) -> pd.DataFrame:
+    mask = (
+        (prices["ts_code"] == wave["symbol"])
+        & (prices["trade_date"] >= pd.Timestamp(wave["start_date"]))
+        & (prices["trade_date"] <= pd.Timestamp(wave["end_date"]))
     )
-    if not isinstance(interval, tuple) or len(interval) != 2:
-        return None
-    return pd.Timestamp(interval[0]), pd.Timestamp(interval[1])
-
-
-def strict_run_display_rows(runs: pd.DataFrame) -> pd.DataFrame:
-    if runs.empty or "end_date" not in runs:
-        return runs.copy()
-    result = runs.copy()
-    if "continuity_label" in result:
-        result = result[result["continuity_label"].isin([STRICT_UP_LABEL, STRICT_DOWN_LABEL])]
-    if "days" in result:
-        result = result[pd.to_numeric(result["days"], errors="coerce") > 3]
-    return result.sort_values("end_date", ascending=False).reset_index(drop=True)
+    return prices.loc[mask].sort_values("trade_date").reset_index(drop=True)
 
 
 def run_dashboard() -> None:
@@ -394,39 +435,48 @@ def run_dashboard() -> None:
 
     st.set_page_config(page_title="连续性趋势评分", layout="wide")
     _apply_theme(st)
-    st.title("连续性系统 - 品种历史波段趋势识别与强度评分")
-    wave_mode = _render_wave_mode_selector(st)
+    st.title("连续性系统 - 品种连续性识别与强度评分")
+    continuity_type = _render_continuity_type_selector(st)
 
     data_dir = Path(st.sidebar.text_input("本地 CSV 目录", str(DEFAULT_DATA_DIR)))
     page_label_to_group = {ASSET_GROUPS[group]: group for group in GROUP_ORDER}
     group_label = st.sidebar.radio("页面", list(page_label_to_group), horizontal=True)
     group = page_label_to_group[group_label]
-    threshold_mode = st.sidebar.selectbox("反转阈值模式", ["自动", "百分比", "点数"])
-    if threshold_mode == "百分比":
-        threshold_value = st.sidebar.number_input("最小反转幅度（%）", min_value=0.0, value=3.0, step=0.5)
-    elif threshold_mode == "点数":
-        threshold_value = st.sidebar.number_input("最小反转点数", min_value=0.0, value=0.0, step=10.0)
+
+    if continuity_type == CONTINUITY_TYPE_INTERVAL:
+        threshold_mode = st.sidebar.selectbox("反转阈值模式", ["自动", "百分比", "点数"])
+        if threshold_mode == "百分比":
+            threshold_value = st.sidebar.number_input("最小反转幅度（%）", min_value=0.0, value=3.0, step=0.5)
+        elif threshold_mode == "点数":
+            threshold_value = st.sidebar.number_input("最小反转点数", min_value=0.0, value=0.0, step=10.0)
+        else:
+            threshold_value = 0.0
+            st.sidebar.caption("自动模式会按 ATR、日波动和绝对波动估算阈值。")
+        reversal_threshold = resolve_reversal_threshold(threshold_mode, threshold_value)
+        _render_interval_continuity_group(st, px, go, data_dir, group, reversal_threshold)
     else:
-        threshold_value = 0.0
-        st.sidebar.caption("自动模式会按 ATR、日波动和绝对波动估算阈值。")
-    reversal_threshold = resolve_reversal_threshold(threshold_mode, threshold_value)
+        _render_interval_continuity_group(
+            st,
+            px,
+            go,
+            data_dir,
+            group,
+            ReversalThreshold(),
+            continuity_labels=STREAK_CONTINUITY_LABELS,
+            include_win_rate=True,
+            use_streak_waves=True,
+        )
 
-    _render_asset_group(st, px, go, data_dir, group, reversal_threshold, wave_mode)
 
-
-def _render_wave_mode_selector(st) -> str:
+def _render_continuity_type_selector(st) -> str:
     controls = st.columns([1.15, 3.2])
     if hasattr(controls[0], "segmented_control"):
-        wave_mode = controls[0].segmented_control("识别模式", WAVE_MODE_OPTIONS, default=WAVE_MODE_ASOF)
-    else:
-        wave_mode = controls[0].radio("识别模式", WAVE_MODE_OPTIONS, horizontal=True)
-    note = (
-        "严格 as-of：只在反向阈值触发当天确认上一段波段，适合实盘观察。"
-        if wave_mode == WAVE_MODE_ASOF
-        else "复盘口径：使用事后 ZigZag 极值日和全样本分位，适合历史回看。"
-    )
-    controls[1].caption(note)
-    return wave_mode
+        return controls[0].segmented_control(
+            "连续性类型",
+            CONTINUITY_TYPE_OPTIONS,
+            default=CONTINUITY_TYPE_INTERVAL,
+        )
+    return controls[0].radio("连续性类型", CONTINUITY_TYPE_OPTIONS, horizontal=True)
 
 
 def _apply_theme(st) -> None:
@@ -551,14 +601,16 @@ def _apply_theme(st) -> None:
     )
 
 
-def _render_asset_group(
+def _render_interval_continuity_group(
     st,
     px,
     go,
     data_dir: Path,
     group: str,
     reversal_threshold: ReversalThreshold,
-    wave_mode: str,
+    continuity_labels: set[str] | None = None,
+    include_win_rate: bool = False,
+    use_streak_waves: bool = False,
 ) -> None:
     st.header(ASSET_GROUPS[group])
     symbol_files = available_symbol_files(data_dir, group=group)
@@ -580,7 +632,7 @@ def _render_asset_group(
 
     min_date = df["trade_date"].min().date()
     max_date = df["trade_date"].max().date()
-    controls = st.columns([1.4, 1, 1, 1])
+    controls = st.columns([1.4, 0.9, 1, 1, 1]) if use_streak_waves else st.columns([1.4, 1, 1, 1])
     date_range = controls[0].date_input(
         "日期范围",
         value=(min_date, max_date),
@@ -588,14 +640,27 @@ def _render_asset_group(
         max_value=max_date,
         key=f"{group}_date_range",
     )
-    direction = controls[1].selectbox(
+    min_wave_days = MIN_WAVE_DAYS
+    control_offset = 0
+    if use_streak_waves:
+        min_wave_days = int(
+            controls[1].number_input(
+                "最小连续天数",
+                min_value=1,
+                value=3,
+                step=1,
+                key=f"{group}_min_streak_days",
+            )
+        )
+        control_offset = 1
+    direction = controls[1 + control_offset].selectbox(
         "方向",
         ["全部", "up", "down"],
         format_func=lambda value: DIRECTION_LABELS.get(value, value),
         key=f"{group}_direction",
     )
-    level = controls[2].selectbox("波段级别", LEVEL_OPTIONS, key=f"{group}_level")
-    sort_by = controls[3].selectbox(
+    level = controls[2 + control_offset].selectbox("波段级别", LEVEL_OPTIONS, key=f"{group}_level")
+    sort_by = controls[3 + control_offset].selectbox(
         "排序",
         ["total_score", "end_date", "points", "days"],
         format_func=sort_option_label,
@@ -603,37 +668,40 @@ def _render_asset_group(
     )
 
     filtered_df = _filter_by_date(df, date_range)
-    detected_waves = detect_waves_for_mode(
-        df,
-        symbol,
-        wave_mode,
-        min_reversal=reversal_threshold.points,
-        min_reversal_pct=reversal_threshold.pct,
-    )
+    if use_streak_waves:
+        detected_waves = detect_streak_waves(df, min_days=min_wave_days)
+    else:
+        detected_waves = detect_interval_waves(
+            df,
+            symbol,
+            min_reversal=reversal_threshold.points,
+            min_reversal_pct=reversal_threshold.pct,
+        )
     confirmed_waves, open_wave = split_waves_for_display(detected_waves)
-    full_scored = score_waves_for_mode(df, confirmed_waves, wave_mode)
+    full_scored = score_interval_waves(df, confirmed_waves)
     scored = filter_scored_waves_by_date(full_scored, date_range)
+    scored = filter_waves_by_continuity(scored, continuity_labels)
     ranked = rank_waves(scored, direction=direction, level=level)
     if not ranked.empty:
         ascending = sort_by == "end_date"
         ranked = ranked.sort_values(sort_by, ascending=ascending).reset_index(drop=True)
 
     _render_summary_metrics(st, filtered_df, scored, ranked)
-    chart_waves = chart_waves_for_display(ranked, open_wave, direction=direction, level=level)
-    _render_price_chart(st, go, filtered_df, chart_waves, wave_mode)
-    if wave_mode == WAVE_MODE_ASOF:
-        _render_open_wave(st, open_wave)
-    else:
-        st.info("复盘模式使用事后极值日切分波段，不展示当前未完成波段。")
+    open_wave = filter_open_wave_by_continuity(df, open_wave, continuity_labels)
+    chart_waves = chart_waves_for_display(ranked, open_wave, direction=direction, level=level, min_wave_days=min_wave_days)
+    _render_price_chart(st, go, filtered_df, chart_waves, min_wave_days=min_wave_days)
+    _render_open_wave(st, open_wave)
+    renderers = [
+        (INTERVAL_ANALYSIS_TAB_LABELS[0], lambda: _render_score_table(st, ranked)),
+        (INTERVAL_ANALYSIS_TAB_LABELS[1], lambda: _render_wave_detail(st, go, ranked)),
+        (INTERVAL_ANALYSIS_TAB_LABELS[2], lambda: _render_wave_compare(st, px, df, ranked)),
+        (INTERVAL_ANALYSIS_TAB_LABELS[3], lambda: _render_interval_continuity(st, px, data_dir, group, symbol_files)),
+    ]
+    if include_win_rate:
+        renderers.append(("胜率统计", lambda: _render_streak_win_rates(st, df, min_wave_days)))
     render_analysis_sections(
         st,
-        [
-            (ANALYSIS_TAB_LABELS[0], lambda: _render_score_table(st, ranked)),
-            (ANALYSIS_TAB_LABELS[1], lambda: _render_wave_detail(st, go, ranked)),
-            (ANALYSIS_TAB_LABELS[2], lambda: _render_wave_compare(st, px, df, ranked)),
-            (ANALYSIS_TAB_LABELS[3], lambda: _render_interval_continuity(st, px, data_dir, group, symbol_files)),
-            (ANALYSIS_TAB_LABELS[4], lambda: _render_strict_runs(st, data_dir, group, symbol_files, df, date_range)),
-        ],
+        renderers,
     )
 
 
@@ -662,9 +730,9 @@ def _render_missing_data_help(st, data_dir: Path, group: str) -> None:
     st.code("\n".join(f"{asset.ts_code}.csv  # {asset.name}" for asset in get_assets(group)))
 
 
-def _render_price_chart(st, go, df: pd.DataFrame, waves: pd.DataFrame, wave_mode: str = WAVE_MODE_ASOF) -> None:
+def _render_price_chart(st, go, df: pd.DataFrame, waves: pd.DataFrame, min_wave_days: int = MIN_WAVE_DAYS) -> None:
     chart_waves = extend_latest_wave_for_chart(waves, df)
-    fig = build_price_volume_figure(go, df, chart_waves, title=f"K线、成交量与波段区间（{wave_mode}）")
+    fig = build_price_volume_figure(go, df, chart_waves, title="K线、成交量与区间波段", min_wave_days=min_wave_days)
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -697,7 +765,6 @@ def _render_score_table(st, waves: pd.DataFrame) -> None:
         "start_date",
         "end_date",
         "extreme_date",
-        "confirmation_date",
         "points",
         "pct_change",
         "days",
@@ -855,60 +922,73 @@ def _render_interval_continuity(st, px, data_dir: Path, group: str, symbol_files
     st.dataframe(format_display_dataframe(ranked, columns), use_container_width=True, hide_index=True)
 
 
-def _render_strict_runs(
-    st,
-    data_dir: Path,
-    group: str,
-    symbol_files: dict[str, Path],
-    current_df: pd.DataFrame,
-    date_range,
-) -> None:
-    st.subheader("连阴连阳识别")
-    filtered_current = _filter_by_date(current_df, date_range)
-    runs = detect_strict_runs(filtered_current)
-
-    st.markdown("当前品种严格连阴连阳表（持续天数大于 3）")
-    display_runs = strict_run_display_rows(runs)
-    if display_runs.empty:
-        st.info("当前日期范围内没有持续天数大于 3 的严格连阳或连阴段。")
-    else:
-        st.dataframe(format_display_dataframe(display_runs, strict_run_table_columns()), use_container_width=True, hide_index=True)
-
-    frames = []
-    for symbol in symbol_files:
-        try:
-            frames.append(load_symbol_data(data_dir, symbol, group=group))
-        except FileNotFoundError:
-            continue
-    if not frames or not isinstance(date_range, tuple) or len(date_range) != 2:
+def _render_streak_win_rates(st, df: pd.DataFrame, min_days: int = 3) -> None:
+    st.subheader("胜率统计")
+    win_rates = score_streak_win_rates(df, min_days=min_days, horizons=STREAK_WIN_RATE_HORIZONS)
+    if win_rates.empty:
+        st.info("当前品种没有足够的历史样本计算后续涨跌统计。")
         return
-
-    prices = pd.concat(frames, ignore_index=True)
-    summary_interval = strict_run_summary_interval(
-        st,
-        prices,
-        date_range,
-        key=f"{group}_strict_summary_interval",
+    st.dataframe(
+        format_display_dataframe(win_rates, _streak_outcome_summary_columns()),
+        use_container_width=True,
+        hide_index=True,
     )
-    if summary_interval is None:
-        return
 
-    summary = summarize_strict_runs(prices, summary_interval[0], summary_interval[1])
-    st.markdown("所选区间横向统计")
-    if summary.empty:
-        st.info("所选区间内没有可统计的严格连续形态。")
+    signal_outcomes = streak_signal_outcomes(df, min_days=min_days, horizons=STREAK_WIN_RATE_HORIZONS)
+    if signal_outcomes.empty:
         return
-
-    summary["name"] = summary["symbol"].map(lambda code: display_name(code, group))
-    st.dataframe(format_display_dataframe(summary, strict_run_summary_table_columns()), use_container_width=True, hide_index=True)
+    signal_outcomes = signal_outcomes.rename(columns={"start_date": "start_time", "end_date": "end_time"})
+    st.subheader("最近信号明细")
+    st.dataframe(
+        format_display_dataframe(signal_outcomes.head(50), _streak_signal_detail_columns()),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 def _format_dates(df: pd.DataFrame) -> pd.DataFrame:
     display = df.copy()
-    for column in ["start_date", "end_date", "trade_date", "confirmation_date", "extreme_date"]:
+    for column in [
+        "start_date",
+        "end_date",
+        "trade_date",
+        "confirmation_date",
+        "extreme_date",
+        "latest_start_date",
+        "latest_end_date",
+        "start_time",
+        "end_time",
+    ]:
         if column in display:
             display[column] = pd.to_datetime(display[column]).dt.strftime("%Y-%m-%d")
     return display
+
+
+def _streak_outcome_summary_columns() -> list[str]:
+    columns = ["trigger_rule", "total_signals", "latest_start_date", "latest_end_date", "latest_streak_days"]
+    for horizon in STREAK_WIN_RATE_HORIZONS:
+        columns.extend(
+            [
+                f"signals_{horizon}d",
+                f"up_count_{horizon}d",
+                f"down_count_{horizon}d",
+                f"flat_count_{horizon}d",
+                f"up_rate_{horizon}d",
+                f"down_rate_{horizon}d",
+                f"avg_return_{horizon}d",
+                f"median_return_{horizon}d",
+                f"best_return_{horizon}d",
+                f"worst_return_{horizon}d",
+            ]
+        )
+    return columns
+
+
+def _streak_signal_detail_columns() -> list[str]:
+    columns = ["start_time", "end_time", "direction", "continuity_label", "streak_days", "end_close"]
+    for horizon in STREAK_WIN_RATE_HORIZONS:
+        columns.append(f"return_{horizon}d")
+    return columns
 
 
 def _wave_radar_chart(go, wave: pd.Series):

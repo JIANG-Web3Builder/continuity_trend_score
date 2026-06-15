@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import pandas as pd
 
+from trend_score.streaks import detect_strict_streaks, summarize_strict_streaks
 
-STRICT_UP_LABEL = "\u4e25\u683c\u8fde\u9633"
-STRICT_DOWN_LABEL = "\u4e25\u683c\u8fde\u9634"
-NON_STRICT_UP_LABEL = "\u975e\u4e25\u683c\u8fde\u9633"
-NON_STRICT_DOWN_LABEL = "\u975e\u4e25\u683c\u8fde\u9634"
+
+STRICT_UP_LABEL = "连阳连续性"
+STRICT_DOWN_LABEL = "连阴连续性"
+NON_STRICT_UP_LABEL = "区间上涨连续性"
+NON_STRICT_DOWN_LABEL = "区间下跌连续性"
 
 STRICT_RUN_COLUMNS = [
     "symbol",
@@ -21,35 +23,9 @@ STRICT_RUN_COLUMNS = [
     "status",
 ]
 
-STRICT_RUN_SUMMARY_COLUMNS = [
-    "symbol",
-    "continuity_label",
-    "start_date",
-    "end_date",
-    "amplitude_pct",
-    "current_direction",
-    "current_run_days",
-    "longest_up_days",
-    "longest_down_days",
-    "longest_direction",
-    "longest_days",
-]
-
-
 def detect_strict_runs(prices: pd.DataFrame, min_days: int = 2) -> pd.DataFrame:
-    """Detect strict bullish/bearish runs from the close-to-close price path."""
-    if prices.empty:
-        return _empty_strict_runs()
-
-    min_days = max(int(min_days), 1)
-    rows: list[dict[str, object]] = []
-    for symbol, group in prices.groupby("ts_code", sort=False, dropna=False):
-        segment = group.sort_values("trade_date").reset_index(drop=True)
-        rows.extend(_detect_symbol_runs(str(symbol), segment, min_days))
-
-    if not rows:
-        return _empty_strict_runs()
-    return pd.DataFrame(rows, columns=STRICT_RUN_COLUMNS)
+    """Backward-compatible wrapper for strict body-based streak detection."""
+    return detect_strict_streaks(prices, min_days=min_days)
 
 
 def detect_continuity_segments(prices: pd.DataFrame, min_days: int = 2) -> pd.DataFrame:
@@ -64,7 +40,7 @@ def detect_continuity_segments(prices: pd.DataFrame, min_days: int = 2) -> pd.Da
         non_strict = _non_strict_interval_row(str(symbol), segment, min_days)
         if non_strict is not None:
             rows.append(non_strict)
-        rows.extend(_detect_symbol_runs(str(symbol), segment, min_days))
+        rows.extend(detect_strict_streaks(segment, min_days=min_days).to_dict("records"))
 
     if not rows:
         return _empty_strict_runs()
@@ -79,115 +55,28 @@ def summarize_strict_runs(
     start_date: str | pd.Timestamp,
     end_date: str | pd.Timestamp,
 ) -> pd.DataFrame:
-    """Summarize strict continuity evidence inside one selected interval."""
-    if prices.empty:
-        return _empty_strict_run_summary()
-
-    start = pd.Timestamp(start_date)
-    end = pd.Timestamp(end_date)
-    rows: list[dict[str, object]] = []
-    for symbol, group in prices.groupby("ts_code", sort=False, dropna=False):
-        segment = group[(group["trade_date"] >= start) & (group["trade_date"] <= end)].sort_values("trade_date")
-        if segment.empty:
-            continue
-
-        runs = detect_strict_runs(segment)
-        symbol_runs = runs[runs["symbol"] == str(symbol)] if not runs.empty else runs
-        current = _current_run(symbol_runs)
-        longest_up = _longest_days(symbol_runs, "up")
-        longest_down = _longest_days(symbol_runs, "down")
-        longest_direction = _longest_direction(longest_up, longest_down)
-        rows.append(
-            {
-                "symbol": str(symbol),
-                "continuity_label": _non_strict_label(segment),
-                "start_date": segment.iloc[0]["trade_date"],
-                "end_date": segment.iloc[-1]["trade_date"],
-                "amplitude_pct": _amplitude_pct(segment),
-                "current_direction": current["direction"] if current is not None else "",
-                "current_run_days": int(current["days"]) if current is not None else 0,
-                "longest_up_days": longest_up,
-                "longest_down_days": longest_down,
-                "longest_direction": longest_direction,
-                "longest_days": max(longest_up, longest_down),
-            }
-        )
-
-    if not rows:
-        return _empty_strict_run_summary()
-    return pd.DataFrame(rows, columns=STRICT_RUN_SUMMARY_COLUMNS).sort_values(
-        ["longest_days", "current_run_days", "symbol"],
-        ascending=[False, False, True],
-    ).reset_index(drop=True)
+    """Backward-compatible wrapper for strict body-based streak summaries."""
+    return summarize_strict_streaks(prices, start_date, end_date)
 
 
 def label_wave_continuity(segment: pd.DataFrame, direction: str) -> str:
-    """Classify one scored wave as strict or non-strict continuity."""
-    if direction not in {"up", "down"}:
-        return "none"
-    if len(segment) < 2:
-        return _label(direction, strict=False)
-
-    directions = segment.apply(_path_direction, axis=1)
-    strict = bool(directions.notna().all() and (directions == direction).all())
-    return _label(direction, strict=strict)
-
-
-def _detect_symbol_runs(symbol: str, segment: pd.DataFrame, min_days: int) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    active_direction: str | None = None
-    start_idx: int | None = None
-
-    for idx, row in segment.iterrows():
-        direction = _path_direction(row)
-        if direction is None:
-            if active_direction is not None and start_idx is not None:
-                _append_run(rows, symbol, segment, start_idx, idx - 1, active_direction, "confirmed", min_days)
-            active_direction = None
-            start_idx = None
-            continue
-
-        if active_direction is None:
-            active_direction = direction
-            start_idx = idx
-        elif direction != active_direction:
-            if start_idx is not None:
-                _append_run(rows, symbol, segment, start_idx, idx - 1, active_direction, "confirmed", min_days)
-            active_direction = direction
-            start_idx = idx
-
-    if active_direction is not None and start_idx is not None:
-        _append_run(rows, symbol, segment, start_idx, len(segment) - 1, active_direction, "open", min_days)
-    return rows
+    """Classify one scored wave by strict body continuity first, then interval continuity."""
+    if direction in {"up", "down"} and _is_strict_body_segment(segment, direction):
+        return _label(direction, strict=True)
+    if direction == "up":
+        return NON_STRICT_UP_LABEL
+    if direction == "down":
+        return NON_STRICT_DOWN_LABEL
+    return "none"
 
 
-def _append_run(
-    rows: list[dict[str, object]],
-    symbol: str,
-    segment: pd.DataFrame,
-    start_idx: int,
-    end_idx: int,
-    direction: str,
-    status: str,
-    min_days: int,
-) -> None:
-    if end_idx - start_idx + 1 < min_days:
-        return
-    rows.append(_run_row(symbol, segment, start_idx, end_idx, direction, status, strict=True))
-
-
-def _path_direction(row: pd.Series) -> str | None:
-    if "change" in row and pd.notna(row["change"]):
-        delta = float(row["change"])
-    elif "pre_close" in row and pd.notna(row["pre_close"]):
-        delta = float(row["close"]) - float(row["pre_close"])
-    else:
-        delta = float(row["close"]) - float(row["open"])
-    if delta > 0:
-        return "up"
-    if delta < 0:
-        return "down"
-    return None
+def _is_strict_body_segment(segment: pd.DataFrame, direction: str) -> bool:
+    if segment.empty:
+        return False
+    body_delta = segment["close"].astype(float) - segment["open"].astype(float)
+    if direction == "up":
+        return bool((body_delta > 0).all())
+    return bool((body_delta < 0).all())
 
 
 def _run_row(
@@ -240,32 +129,6 @@ def _label(direction: str, strict: bool) -> str:
     return NON_STRICT_UP_LABEL if direction == "up" else NON_STRICT_DOWN_LABEL
 
 
-def _current_run(runs: pd.DataFrame) -> pd.Series | None:
-    if runs.empty:
-        return None
-    open_runs = runs[runs["status"] == "open"]
-    if open_runs.empty:
-        return None
-    return open_runs.sort_values("end_date").iloc[-1]
-
-
-def _longest_days(runs: pd.DataFrame, direction: str) -> int:
-    if runs.empty:
-        return 0
-    directed = runs[runs["direction"] == direction]
-    if directed.empty:
-        return 0
-    return int(directed["days"].max())
-
-
-def _longest_direction(longest_up: int, longest_down: int) -> str:
-    if longest_up == 0 and longest_down == 0:
-        return ""
-    if longest_up >= longest_down:
-        return "up"
-    return "down"
-
-
 def _non_strict_label(segment: pd.DataFrame) -> str:
     first_close = float(segment.iloc[0]["close"])
     last_close = float(segment.iloc[-1]["close"])
@@ -276,18 +139,5 @@ def _non_strict_label(segment: pd.DataFrame) -> str:
     return "none"
 
 
-def _amplitude_pct(segment: pd.DataFrame) -> float:
-    base = float(segment.iloc[0]["close"])
-    if base == 0:
-        return 0.0
-    high = float(segment["high"].max()) if "high" in segment else float(segment["close"].max())
-    low = float(segment["low"].min()) if "low" in segment else float(segment["close"].min())
-    return round((high - low) / base * 100.0, 6)
-
-
 def _empty_strict_runs() -> pd.DataFrame:
     return pd.DataFrame(columns=STRICT_RUN_COLUMNS)
-
-
-def _empty_strict_run_summary() -> pd.DataFrame:
-    return pd.DataFrame(columns=STRICT_RUN_SUMMARY_COLUMNS)
