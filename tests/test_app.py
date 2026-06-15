@@ -60,13 +60,13 @@ def test_resolve_reversal_threshold_modes():
     assert app.resolve_reversal_threshold("点数", 80).points == 80.0
 
 
-def test_wave_mode_options_are_chinese_and_default_to_asof():
+def test_continuity_type_options_are_business_terms():
     app = importlib.import_module("app")
 
-    assert app.WAVE_MODE_OPTIONS == ["无未来函数模式", "复盘模式"]
+    assert app.CONTINUITY_TYPE_OPTIONS == ["区间连续性", "连阳连阴连续性"]
 
 
-def test_detect_waves_for_mode_switches_between_asof_and_review_dates():
+def test_detect_interval_waves_uses_review_history_and_asof_latest_wave():
     app = importlib.import_module("app")
     dates = pd.date_range("2024-01-01", periods=5, freq="D")
     prices = pd.DataFrame(
@@ -82,27 +82,20 @@ def test_detect_waves_for_mode_switches_between_asof_and_review_dates():
         }
     )
 
-    asof = app.detect_waves_for_mode(
+    waves = app.detect_interval_waves(
         prices,
         "000001.SH",
-        app.WAVE_MODE_OPTIONS[0],
-        min_reversal=4,
-        min_wave_days=1,
-    )
-    review = app.detect_waves_for_mode(
-        prices,
-        "000001.SH",
-        app.WAVE_MODE_OPTIONS[1],
         min_reversal=4,
         min_wave_days=1,
     )
 
-    assert asof[asof["status"] == "confirmed"].loc[0, "end_date"] == pd.Timestamp("2024-01-05")
-    assert review.loc[0, "end_date"] == pd.Timestamp("2024-01-03")
-    assert set(review["status"]) == {"confirmed"}
+    assert waves.loc[0, "status"] == "confirmed"
+    assert waves.loc[0, "end_date"] == pd.Timestamp("2024-01-03")
+    assert waves.loc[1, "status"] == "open"
+    assert waves.loc[1, "start_date"] == pd.Timestamp("2024-01-03")
 
 
-def test_detect_waves_for_mode_default_filters_scored_waves_shorter_than_minimum():
+def test_detect_interval_waves_keeps_latest_short_wave_open_out_of_scored_history():
     app = importlib.import_module("app")
     dates = pd.date_range("2024-01-01", periods=10, freq="D")
     prices = pd.DataFrame(
@@ -118,12 +111,14 @@ def test_detect_waves_for_mode_default_filters_scored_waves_shorter_than_minimum
         }
     )
 
-    waves = app.detect_waves_for_mode(prices, "000001.SH", app.WAVE_MODE_OPTIONS[0], min_reversal=4)
-    confirmed, _open_wave = app.split_waves_for_display(waves)
-    scored = app.score_waves_for_mode(prices, confirmed, app.WAVE_MODE_OPTIONS[0])
+    waves = app.detect_interval_waves(prices, "000001.SH", min_reversal=4, min_wave_days=1)
+    confirmed, open_wave = app.split_waves_for_display(waves)
+    scored = app.score_interval_waves(prices, confirmed)
 
     assert app.MIN_WAVE_DAYS == 10
-    assert scored["days"].tolist() == [10]
+    assert scored["status"].tolist() == ["confirmed"]
+    assert open_wave["status"] == "open"
+    assert int(open_wave["days"]) == 2
 
 
 def test_extend_latest_wave_for_chart_does_not_extend_confirmed_wave_to_latest_date():
@@ -227,6 +222,25 @@ def test_chart_waves_for_display_excludes_latest_open_wave_shorter_than_minimum(
     assert chart_waves["status"].tolist() == ["confirmed"]
 
 
+def test_chart_waves_for_display_uses_custom_minimum_for_streak_page():
+    app = importlib.import_module("app")
+    ranked = pd.DataFrame(columns=["direction", "status", "start_date", "end_date", "level"])
+    open_wave = pd.Series(
+        {
+            "direction": "up",
+            "status": "open",
+            "start_date": pd.Timestamp("2024-01-10"),
+            "end_date": pd.Timestamp("2024-01-12"),
+            "level": "小",
+            "days": 3,
+        }
+    )
+
+    chart_waves = app.chart_waves_for_display(ranked, open_wave, min_wave_days=3)
+
+    assert chart_waves["status"].tolist() == ["open"]
+
+
 def test_extend_latest_wave_for_chart_keeps_open_wave_without_extending_confirmed_rows():
     app = importlib.import_module("app")
     prices = pd.DataFrame(
@@ -284,6 +298,25 @@ def test_wave_background_spans_exclude_waves_shorter_than_minimum():
 
     assert [(span["x0"], span["x1"], span["direction"]) for span in spans] == [
         (pd.Timestamp("2026-01-12"), pd.Timestamp("2026-01-25"), "down"),
+    ]
+
+
+def test_wave_background_spans_respect_custom_minimum():
+    app = importlib.import_module("app")
+    waves = pd.DataFrame(
+        {
+            "direction": ["up", "down"],
+            "start_date": pd.to_datetime(["2026-01-01", "2026-01-05"]),
+            "end_date": pd.to_datetime(["2026-01-03", "2026-01-07"]),
+            "days": [3, 3],
+        }
+    )
+
+    spans = app.wave_background_spans(waves, min_wave_days=3)
+
+    assert [(span["x0"], span["x1"], span["direction"]) for span in spans] == [
+        (pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-03"), "up"),
+        (pd.Timestamp("2026-01-05"), pd.Timestamp("2026-01-07"), "down"),
     ]
 
 
@@ -349,11 +382,11 @@ def test_format_display_dataframe_translates_score_columns_and_values():
     assert display["起始日期"].tolist() == ["2026-01-01", "2026-01-05"]
 
 
-def test_format_display_dataframe_translates_strict_run_columns():
+def test_format_display_dataframe_translates_streak_columns():
     app = importlib.import_module("app")
     raw = pd.DataFrame(
         {
-            "continuity_label": ["严格连阳"],
+            "continuity_label": ["连阳连续性"],
             "current_direction": ["up"],
             "current_run_days": [3],
             "amplitude_pct": [6.25],
@@ -378,88 +411,91 @@ def test_format_display_dataframe_translates_strict_run_columns():
     ]
 
 
-def test_strict_run_table_columns_drop_redundant_direction_and_status():
+def test_format_display_dataframe_translates_streak_outcome_distribution_columns():
     app = importlib.import_module("app")
+    raw = pd.DataFrame(
+        {
+            "trigger_rule": ["连阳>=3天"],
+            "total_signals": [12],
+            "latest_start_date": pd.to_datetime(["2026-05-08"]),
+            "latest_end_date": pd.to_datetime(["2026-05-11"]),
+            "latest_streak_days": [4],
+            "signals_1d": [10],
+            "up_count_1d": [6],
+            "down_count_1d": [3],
+            "flat_count_1d": [1],
+            "up_rate_1d": [60.0],
+            "down_rate_1d": [30.0],
+            "avg_return_1d": [0.85],
+            "return_1d": [1.2],
+            "start_time": pd.to_datetime(["2026-05-08"]),
+            "end_time": pd.to_datetime(["2026-05-11"]),
+        }
+    )
 
-    assert app.strict_run_table_columns() == [
-        "continuity_label",
-        "start_date",
-        "end_date",
-        "days",
-        "pct_change",
-        "start_price",
-        "end_price",
+    display = app.format_display_dataframe(raw)
+
+    assert display.columns.tolist() == [
+        "触发条件",
+        "样本数",
+        "最近起始时间",
+        "最近结束时间",
+        "最近连续天数",
+        "1日有效样本数",
+        "1日上涨次数",
+        "1日下跌次数",
+        "1日持平次数",
+        "1日上涨占比(%)",
+        "1日下跌占比(%)",
+        "1日平均涨跌幅(%)",
+        "1日涨跌幅(%)",
+        "起始时间",
+        "结束时间",
     ]
+    assert display["最近起始时间"].tolist() == ["2026-05-08"]
+    assert display["最近结束时间"].tolist() == ["2026-05-11"]
+    assert "1日延续胜率(%)" not in display.columns
+    assert "1日延续成功" not in display.columns
 
 
-def test_strict_run_summary_table_columns_use_amplitude_instead_of_direction_columns():
+def test_filter_waves_by_continuity_keeps_only_requested_labels():
     app = importlib.import_module("app")
-
-    columns = app.strict_run_summary_table_columns()
-
-    assert "current_direction" not in columns
-    assert "longest_direction" not in columns
-    assert "amplitude_pct" in columns
-
-
-def test_strict_run_summary_interval_uses_visible_local_date_picker():
-    app = importlib.import_module("app")
-
-    class FakeStreamlit:
-        def __init__(self):
-            self.kwargs = None
-
-        def date_input(self, _label, **kwargs):
-            self.kwargs = kwargs
-            return (pd.Timestamp("2024-01-03").date(), pd.Timestamp("2024-01-06").date())
-
-    prices = pd.DataFrame({"trade_date": pd.date_range("2024-01-01", periods=10, freq="D")})
-    fake_st = FakeStreamlit()
-
-    interval = app.strict_run_summary_interval(
-        fake_st,
-        prices,
-        (pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-09")),
-        key="strict_summary_interval",
-    )
-
-    assert interval == (pd.Timestamp("2024-01-03"), pd.Timestamp("2024-01-06"))
-    assert fake_st.kwargs["value"] == (pd.Timestamp("2024-01-02").date(), pd.Timestamp("2024-01-09").date())
-    assert fake_st.kwargs["min_value"] == pd.Timestamp("2024-01-01").date()
-    assert fake_st.kwargs["max_value"] == pd.Timestamp("2024-01-10").date()
-    assert fake_st.kwargs["key"] == "strict_summary_interval"
-
-
-def test_strict_run_display_rows_keeps_full_history():
-    app = importlib.import_module("app")
-    raw = pd.DataFrame(
+    waves = pd.DataFrame(
         {
-            "end_date": pd.date_range("2024-01-01", periods=15, freq="D"),
-            "days": [4] * 15,
+            "continuity_label": ["区间上涨连续性", "连阳连续性", "连阴连续性"],
+            "total_score": [80.0, 90.0, 70.0],
         }
     )
 
-    display = app.strict_run_display_rows(raw)
+    result = app.filter_waves_by_continuity(waves, {"连阳连续性", "连阴连续性"})
 
-    assert len(display) == 15
-    assert display["end_date"].tolist() == list(reversed(raw["end_date"].tolist()))
+    assert result["continuity_label"].tolist() == ["连阳连续性", "连阴连续性"]
 
 
-def test_strict_run_display_rows_only_keeps_strict_runs_longer_than_three_days():
+def test_detect_streak_waves_uses_minimum_continuous_days_as_wave_threshold():
     app = importlib.import_module("app")
-    raw = pd.DataFrame(
+    dates = pd.date_range("2024-01-01", periods=6, freq="D")
+    prices = pd.DataFrame(
         {
-            "continuity_label": ["非严格连阳", "严格连阳", "严格连阴", "严格连阳"],
-            "end_date": pd.date_range("2024-01-01", periods=4, freq="D"),
-            "days": [8, 3, 4, 5],
+            "ts_code": "AAA",
+            "trade_date": dates,
+            "open": [100, 101, 102, 104, 103, 102],
+            "high": [102, 103, 104, 105, 104, 103],
+            "low": [99, 100, 101, 103, 101, 100],
+            "close": [101, 102, 103, 104, 102, 101],
+            "vol": [1000] * 6,
         }
     )
 
-    display = app.strict_run_display_rows(raw)
+    min_three = app.detect_streak_waves(prices, min_days=3)
+    min_two = app.detect_streak_waves(prices, min_days=2)
 
-    assert display[["continuity_label", "days"]].to_dict("records") == [
-        {"continuity_label": "严格连阳", "days": 5},
-        {"continuity_label": "严格连阴", "days": 4},
+    assert min_three[["direction", "days", "status", "points"]].to_dict("records") == [
+        {"direction": "up", "days": 3, "status": "confirmed", "points": 3.0}
+    ]
+    assert min_two[["direction", "days", "status", "points"]].to_dict("records") == [
+        {"direction": "up", "days": 3, "status": "confirmed", "points": 3.0},
+        {"direction": "down", "days": 2, "status": "open", "points": 2.0},
     ]
 
 
@@ -483,9 +519,10 @@ def test_render_score_table_includes_continuity_label_column():
         {
             "direction": ["up"],
             "level": ["中"],
-            "continuity_label": ["非严格连阳"],
+            "continuity_label": ["区间上涨连续性"],
             "start_date": pd.to_datetime(["2026-04-27"]),
             "end_date": pd.to_datetime(["2026-05-11"]),
+            "confirmation_date": pd.to_datetime(["2026-05-12"]),
             "points": [138.67],
             "pct_change": [3.39],
             "days": [8],
@@ -497,12 +534,83 @@ def test_render_score_table_includes_continuity_label_column():
     app._render_score_table(fake_st, waves)
 
     assert app.DISPLAY_COLUMN_LABELS["continuity_label"] in fake_st.frame.columns
+    assert "确认日期" not in fake_st.frame.columns
 
 
-def test_analysis_tab_labels_include_strict_run_view():
+def test_render_streak_win_rates_shows_summary_table_and_recent_signal_details_without_matrix_heading():
+    app = importlib.import_module("app")
+    dates = pd.date_range("2024-01-01", periods=7, freq="D")
+    prices = pd.DataFrame(
+        {
+            "ts_code": "AAA",
+            "trade_date": dates,
+            "open": [100, 101, 102, 104, 103, 102, 98],
+            "high": [102, 103, 104, 105, 104, 103, 100],
+            "low": [99, 100, 101, 102, 101, 99, 97],
+            "close": [101, 102, 103, 103, 102, 100, 99],
+            "vol": [1000] * 7,
+        }
+    )
+
+    class FakeStreamlit:
+        def __init__(self):
+            self.subheaders = []
+            self.frames = []
+
+        def subheader(self, text):
+            self.subheaders.append(text)
+
+        def info(self, _text):
+            pass
+
+        def dataframe(self, frame, **_kwargs):
+            self.frames.append(frame)
+
+    fake_st = FakeStreamlit()
+
+    app._render_streak_win_rates(fake_st, prices, min_days=2)
+
+    assert fake_st.subheaders == ["胜率统计", "最近信号明细"]
+    assert len(fake_st.frames) == 2
+    assert fake_st.frames[0]["触发条件"].tolist() == ["连阳>=2天", "连阴>=2天"]
+    assert "连续天数" not in fake_st.frames[0].columns
+    assert "观察周期" not in fake_st.frames[0].columns
+    assert "1日延续胜率(%)" not in fake_st.frames[0].columns
+    assert "3日延续胜率(%)" not in fake_st.frames[0].columns
+    assert {"1日上涨占比(%)", "1日下跌占比(%)", "3日上涨占比(%)", "样本数"}.issubset(fake_st.frames[0].columns)
+    assert "信号日" not in fake_st.frames[1].columns
+    assert "1日延续成功" not in fake_st.frames[1].columns
+    assert {"起始时间", "结束时间", "连续天数", "1日涨跌幅(%)"}.issubset(fake_st.frames[1].columns)
+
+
+def test_interval_analysis_tab_labels_do_not_include_streak_win_rate():
     app = importlib.import_module("app")
 
-    assert app.ANALYSIS_TAB_LABELS == ["波段评分表", "单个波段详情", "波段对比", "区间横向对比", "连阴连阳识别"]
+    assert app.INTERVAL_ANALYSIS_TAB_LABELS == ["波段评分表", "单个波段详情", "波段对比", "区间横向对比"]
+    assert "胜率统计" not in app.INTERVAL_ANALYSIS_TAB_LABELS
+
+
+def test_streak_analysis_tab_labels_include_win_rate():
+    app = importlib.import_module("app")
+
+    assert app.STREAK_ANALYSIS_TAB_LABELS == ["波段评分表", "单个波段详情", "波段对比", "区间横向对比", "胜率统计"]
+
+
+def test_continuity_type_selector_does_not_render_explanatory_caption():
+    app = importlib.import_module("app")
+
+    class FakeColumn:
+        def segmented_control(self, _label, _options, default):
+            return default
+
+        def caption(self, text):
+            raise AssertionError(f"unexpected caption: {text}")
+
+    class FakeStreamlit:
+        def columns(self, _spec):
+            return [FakeColumn(), FakeColumn()]
+
+    assert app._render_continuity_type_selector(FakeStreamlit()) == "区间连续性"
 
 
 def test_sort_option_label_is_chinese():

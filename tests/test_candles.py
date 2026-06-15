@@ -1,7 +1,6 @@
 import pandas as pd
 
 from trend_score.candles import (
-    NON_STRICT_DOWN_LABEL,
     NON_STRICT_UP_LABEL,
     STRICT_DOWN_LABEL,
     STRICT_UP_LABEL,
@@ -50,7 +49,7 @@ def test_detect_strict_runs_does_not_count_positive_bodies_when_close_path_break
     result = detect_strict_runs(prices)
 
     assert result[["direction", "continuity_label", "days", "status"]].to_dict("records") == [
-        {"direction": "up", "continuity_label": STRICT_UP_LABEL, "days": 3, "status": "open"},
+        {"direction": "up", "continuity_label": STRICT_UP_LABEL, "days": 5, "status": "open"},
     ]
     assert (result["days"] >= 2).all()
 
@@ -86,9 +85,9 @@ def test_detect_continuity_segments_adds_non_strict_interval_label_with_strict_r
         },
         {
             "continuity_label": STRICT_UP_LABEL,
-            "start_date": pd.Timestamp("2024-01-03"),
+            "start_date": pd.Timestamp("2024-01-01"),
             "end_date": pd.Timestamp("2024-01-05"),
-            "days": 3,
+            "days": 5,
         },
     ]
     assert (result["days"] >= 2).all()
@@ -110,7 +109,7 @@ def test_summarize_strict_runs_reports_current_and_longest_runs_by_interval():
     ].to_dict("records") == [
         {
             "symbol": "AAA",
-            "continuity_label": NON_STRICT_DOWN_LABEL,
+            "continuity_label": STRICT_DOWN_LABEL,
             "current_direction": "down",
             "current_run_days": 3,
             "longest_up_days": 0,
@@ -118,7 +117,7 @@ def test_summarize_strict_runs_reports_current_and_longest_runs_by_interval():
         },
         {
             "symbol": "BBB",
-            "continuity_label": "none",
+            "continuity_label": STRICT_UP_LABEL,
             "current_direction": "",
             "current_run_days": 0,
             "longest_up_days": 2,

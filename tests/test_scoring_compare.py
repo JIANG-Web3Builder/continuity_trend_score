@@ -78,11 +78,12 @@ def test_score_waves_rewards_low_drawdown_more_than_choppy_path():
 def test_score_waves_labels_wave_continuity_from_price_path():
     dates = pd.date_range("2024-01-01", periods=8, freq="D")
     closes = [100, 102, 104, 103, 106, 108, 106, 104]
+    opens = [100, 101, 103, 104, 105, 107, 107, 105]
     prices = pd.DataFrame(
         {
             "ts_code": "AAA",
             "trade_date": dates,
-            "open": closes,
+            "open": opens,
             "high": [close + 1 for close in closes],
             "low": [close - 1 for close in closes],
             "close": closes,
