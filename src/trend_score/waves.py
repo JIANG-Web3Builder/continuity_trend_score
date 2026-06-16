@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 
-LEVEL_LABELS = ("小", "中", "大", "超大")
+LEVEL_LABELS = ("300点以下", "300-500点", "500-800点", "800-1000点", "1000点以上")
 MIN_WAVE_DAYS = 10
 
 
@@ -104,41 +104,21 @@ def detect_review_waves(
 
 
 def classify_wave_levels(waves: pd.DataFrame) -> pd.DataFrame:
-    """Classify waves by each symbol's own point-size quantiles."""
+    """Classify waves by fixed point-size buckets."""
     if waves.empty:
         result = waves.copy()
         if "level" not in result.columns:
             result["level"] = pd.Series(dtype="object")
         return result
 
-    if "status" not in waves.columns:
-        return _classify_full_sample_levels(waves)
-
     result = waves.copy()
-    result["level"] = ""
-    for _, group in result.groupby("symbol", dropna=False, sort=False):
-        history: list[float] = []
-        for index, row in group.sort_values(_wave_order_columns(group)).iterrows():
-            point = float(row.get("points", 0.0) or 0.0)
-            level_history = history + [point]
-            result.loc[index, "level"] = _level_for_history(level_history, point)
-            if row.get("status") == "confirmed":
-                history.append(point)
+    points = pd.to_numeric(result.get("points", 0.0), errors="coerce").fillna(0.0)
+    result["level"] = points.map(_point_level_label)
     return result
 
 
 def _classify_full_sample_levels(waves: pd.DataFrame) -> pd.DataFrame:
-    result = waves.copy()
-    result["level"] = ""
-    for symbol, index in result.groupby("symbol").groups.items():
-        points = result.loc[index, "points"].astype(float)
-        if len(points) < 4 or points.nunique() == 1:
-            result.loc[index, "level"] = LEVEL_LABELS[1]
-            continue
-
-        q25, q50, q75 = points.quantile([0.25, 0.50, 0.75]).tolist()
-        result.loc[index, "level"] = points.apply(lambda value: _level_for_points(value, q25, q50, q75))
-    return result
+    return classify_wave_levels(waves)
 
 
 def _asof_zigzag_waves(
@@ -312,15 +292,6 @@ def _reversal_progress(
     return round(max(0.0, min(reversal_points / denominator, 1.0)) * 100.0, 2)
 
 
-def _wave_order_columns(group: pd.DataFrame) -> list[str]:
-    columns = []
-    if "confirmation_date" in group.columns:
-        columns.append("confirmation_date")
-    if "end_date" in group.columns:
-        columns.append("end_date")
-    return columns or list(group.index.names)
-
-
 def _threshold_for_index(
     idx: int,
     threshold: float | None,
@@ -456,22 +427,16 @@ def _adaptive_reversal_threshold(df: pd.DataFrame, atr_multiplier: float) -> flo
     return float(max(close.max() - close.min(), 0.0))
 
 
-def _level_for_history(points: list[float], value: float) -> str:
-    series = pd.Series(points, dtype="float64")
-    if len(series) == 1 or series.nunique() == 1:
-        return LEVEL_LABELS[1]
-    q25, q50, q75 = series.quantile([0.25, 0.50, 0.75]).tolist()
-    return _level_for_points(value, q25, q50, q75)
-
-
-def _level_for_points(value: float, q25: float, q50: float, q75: float) -> str:
-    if value <= q25:
+def _point_level_label(value: float) -> str:
+    if value < 300:
         return LEVEL_LABELS[0]
-    if value <= q50:
+    if value < 500:
         return LEVEL_LABELS[1]
-    if value <= q75:
+    if value < 800:
         return LEVEL_LABELS[2]
-    return LEVEL_LABELS[3]
+    if value < 1000:
+        return LEVEL_LABELS[3]
+    return LEVEL_LABELS[4]
 
 
 def _empty_waves() -> pd.DataFrame:

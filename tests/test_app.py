@@ -231,7 +231,7 @@ def test_chart_waves_for_display_uses_custom_minimum_for_streak_page():
             "status": "open",
             "start_date": pd.Timestamp("2024-01-10"),
             "end_date": pd.Timestamp("2024-01-12"),
-            "level": "小",
+            "level": "300点以下",
             "days": 3,
         }
     )
@@ -382,6 +382,25 @@ def test_format_display_dataframe_translates_score_columns_and_values():
     assert display["起始日期"].tolist() == ["2026-01-01", "2026-01-05"]
 
 
+def test_format_display_dataframe_formats_price_columns_to_two_decimals():
+    app = importlib.import_module("app")
+    raw = pd.DataFrame(
+        {
+            "close": [101.2345, 104.1],
+            "end_close": [99.8765, 100],
+            "start_price": [100.1234, 110.0],
+            "end_price": [120.5678, 104.1],
+        }
+    )
+
+    display = app.format_display_dataframe(raw)
+
+    assert display["收盘价"].tolist() == ["101.23", "104.10"]
+    assert display["结束收盘价"].tolist() == ["99.88", "100.00"]
+    assert display["起点价格"].tolist() == ["100.12", "110.00"]
+    assert display["终点价格"].tolist() == ["120.57", "104.10"]
+
+
 def test_format_display_dataframe_translates_streak_columns():
     app = importlib.import_module("app")
     raw = pd.DataFrame(
@@ -415,7 +434,6 @@ def test_format_display_dataframe_translates_streak_outcome_distribution_columns
     app = importlib.import_module("app")
     raw = pd.DataFrame(
         {
-            "trigger_rule": ["连阳>=3天"],
             "total_signals": [12],
             "latest_start_date": pd.to_datetime(["2026-05-08"]),
             "latest_end_date": pd.to_datetime(["2026-05-11"]),
@@ -436,7 +454,6 @@ def test_format_display_dataframe_translates_streak_outcome_distribution_columns
     display = app.format_display_dataframe(raw)
 
     assert display.columns.tolist() == [
-        "触发条件",
         "样本数",
         "最近起始时间",
         "最近结束时间",
@@ -454,8 +471,25 @@ def test_format_display_dataframe_translates_streak_outcome_distribution_columns
     ]
     assert display["最近起始时间"].tolist() == ["2026-05-08"]
     assert display["最近结束时间"].tolist() == ["2026-05-11"]
+    assert "触发条件" not in display.columns
     assert "1日延续胜率(%)" not in display.columns
     assert "1日延续成功" not in display.columns
+
+
+def test_format_win_rate_summary_dataframe_labels_streak_days_by_direction():
+    app = importlib.import_module("app")
+    raw = pd.DataFrame(
+        {
+            "direction": ["up", "down", "up"],
+            "streak_days": [4, 5, 10],
+            "continuity_label": ["连阳连续性", "连阴连续性", "连阳连续性"],
+        }
+    )
+
+    display = app._format_win_rate_summary_dataframe(raw)
+
+    assert display["streak_days"].tolist() == ["四连阳", "五连阴", "十连阳"]
+    assert raw["streak_days"].tolist() == [4, 5, 10]
 
 
 def test_filter_waves_by_continuity_keeps_only_requested_labels():
@@ -518,7 +552,7 @@ def test_render_score_table_includes_continuity_label_column():
     waves = pd.DataFrame(
         {
             "direction": ["up"],
-            "level": ["中"],
+            "level": ["300-500点"],
             "continuity_label": ["区间上涨连续性"],
             "start_date": pd.to_datetime(["2026-04-27"]),
             "end_date": pd.to_datetime(["2026-05-11"]),
@@ -570,17 +604,63 @@ def test_render_streak_win_rates_shows_summary_table_and_recent_signal_details_w
 
     app._render_streak_win_rates(fake_st, prices, min_days=2)
 
-    assert fake_st.subheaders == ["胜率统计", "最近信号明细"]
+    assert fake_st.subheaders == ["胜率统计", "信号明细表"]
     assert len(fake_st.frames) == 2
-    assert fake_st.frames[0]["触发条件"].tolist() == ["连阳>=2天", "连阴>=2天"]
-    assert "连续天数" not in fake_st.frames[0].columns
+    assert "触发条件" not in fake_st.frames[0].columns
+    assert fake_st.frames[0].columns.tolist() == [
+        "连续标签",
+        "连续天数",
+        "样本数",
+        "最近结束时间",
+        "1日有效样本数",
+        "1日胜率(%)",
+        "1日平均涨跌幅(%)",
+        "3日胜率(%)",
+        "3日平均涨跌幅(%)",
+    ]
     assert "观察周期" not in fake_st.frames[0].columns
     assert "1日延续胜率(%)" not in fake_st.frames[0].columns
     assert "3日延续胜率(%)" not in fake_st.frames[0].columns
-    assert {"1日上涨占比(%)", "1日下跌占比(%)", "3日上涨占比(%)", "样本数"}.issubset(fake_st.frames[0].columns)
+    assert fake_st.frames[0]["连续天数"].tolist() == ["二连阳", "三连阳", "二连阴", "三连阴"]
     assert "信号日" not in fake_st.frames[1].columns
     assert "1日延续成功" not in fake_st.frames[1].columns
-    assert {"起始时间", "结束时间", "连续天数", "1日涨跌幅(%)"}.issubset(fake_st.frames[1].columns)
+    assert fake_st.frames[1].columns.tolist() == [
+        "起始时间",
+        "结束时间",
+        "方向",
+        "连续标签",
+        "连续天数",
+        "结束收盘价",
+        "1日涨跌幅(%)",
+        "3日涨跌幅(%)",
+        "5日涨跌幅(%)",
+        "10日涨跌幅(%)",
+    ]
+    assert fake_st.frames[1]["连续天数"].tolist() == [3, 3]
+
+
+def test_level_options_use_fixed_point_buckets():
+    app = importlib.import_module("app")
+
+    assert app.LEVEL_OPTIONS == ["全部", "300点以下", "300-500点", "500-800点", "800-1000点", "1000点以上"]
+
+
+def test_wave_compare_label_uses_date_range_without_number_prefix():
+    app = importlib.import_module("app")
+    wave = pd.Series(
+        {
+            "direction": "up",
+            "level": "300-500点",
+            "start_date": pd.Timestamp("2026-03-19"),
+            "end_date": pd.Timestamp("2026-03-23"),
+            "total_score": 82.14,
+        }
+    )
+
+    label = app._wave_compare_label(12, wave)
+
+    assert label == "2026-03-19 -> 2026-03-23 · 上涨 · 300-500点 · 82.1"
+    assert not label.startswith("W")
 
 
 def test_interval_analysis_tab_labels_do_not_include_streak_win_rate():

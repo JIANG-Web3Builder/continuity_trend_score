@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from trend_score.candles import label_wave_continuity
-from trend_score.waves import _classify_full_sample_levels, classify_wave_levels
+from trend_score.waves import classify_wave_levels
 
 
 SCORE_COLUMNS = [
@@ -67,7 +67,7 @@ def _score_waves(
             result[column] = pd.Series(dtype="float")
         return result.reset_index(drop=True)
     if "level" not in result.columns or result["level"].isna().any() or (result["level"].astype(str) == "").any():
-        result = classify_wave_levels(result) if use_asof_percentiles else _classify_full_sample_levels(result)
+        result = classify_wave_levels(result)
     result = result.reset_index(drop=True)
     segments = [_segment(prices, wave) for _, wave in result.iterrows()]
     result["continuity_label"] = [

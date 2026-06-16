@@ -37,7 +37,7 @@ STREAK_WIN_RATE_COLUMNS = [
     "symbol",
     "direction",
     "continuity_label",
-    "trigger_rule",
+    "streak_days",
     "total_signals",
     "latest_start_date",
     "latest_end_date",
@@ -46,6 +46,7 @@ STREAK_WIN_RATE_COLUMNS = [
     "up_count_1d",
     "down_count_1d",
     "flat_count_1d",
+    "win_rate_1d",
     "up_rate_1d",
     "down_rate_1d",
     "avg_return_1d",
@@ -56,6 +57,7 @@ STREAK_WIN_RATE_COLUMNS = [
     "up_count_3d",
     "down_count_3d",
     "flat_count_3d",
+    "win_rate_3d",
     "up_rate_3d",
     "down_rate_3d",
     "avg_return_3d",
@@ -66,6 +68,7 @@ STREAK_WIN_RATE_COLUMNS = [
     "up_count_5d",
     "down_count_5d",
     "flat_count_5d",
+    "win_rate_5d",
     "up_rate_5d",
     "down_rate_5d",
     "avg_return_5d",
@@ -76,6 +79,7 @@ STREAK_WIN_RATE_COLUMNS = [
     "up_count_10d",
     "down_count_10d",
     "flat_count_10d",
+    "win_rate_10d",
     "up_rate_10d",
     "down_rate_10d",
     "avg_return_10d",
@@ -167,18 +171,19 @@ def score_streak_win_rates(
     min_days: int = 2,
     horizons: tuple[int, ...] = (1, 3, 5, 10),
 ) -> pd.DataFrame:
-    """Summarize future up/down distribution for streaks at or above the selected threshold."""
-    outcomes = streak_signal_outcomes(prices, min_days=min_days, horizons=horizons)
+    """Summarize future up/down distribution by exact streak length."""
+    outcomes = _exact_streak_signal_outcomes_for_lengths(prices, min_days=min_days, horizons=horizons)
     if outcomes.empty:
         return _empty_win_rates()
 
     rows: list[dict[str, object]] = []
-    for (symbol, direction, label), group in outcomes.groupby(["symbol", "direction", "continuity_label"], sort=False):
+    group_keys = ["symbol", "direction", "continuity_label", "streak_days"]
+    for (symbol, direction, label, streak_days), group in outcomes.groupby(group_keys, sort=False):
         row: dict[str, object] = {
             "symbol": symbol,
             "direction": direction,
             "continuity_label": label,
-            "trigger_rule": f"{'连阳' if direction == 'up' else '连阴'}>={int(min_days)}天",
+            "streak_days": int(streak_days),
             "total_signals": int(len(group)),
             "latest_start_date": group.sort_values("end_date").iloc[-1]["start_date"],
             "latest_end_date": group["end_date"].max(),
@@ -196,6 +201,7 @@ def score_streak_win_rates(
             row[f"flat_count_{horizon}d"] = flat_count
             row[f"up_rate_{horizon}d"] = round(up_count / signals * 100.0, 2) if signals else None
             row[f"down_rate_{horizon}d"] = round(down_count / signals * 100.0, 2) if signals else None
+            row[f"win_rate_{horizon}d"] = row[f"up_rate_{horizon}d"] if direction == "up" else row[f"down_rate_{horizon}d"]
             row[f"avg_return_{horizon}d"] = round(float(returns.mean()), 2) if signals else None
             row[f"median_return_{horizon}d"] = round(float(returns.median()), 2) if signals else None
             row[f"best_return_{horizon}d"] = round(float(returns.max()), 2) if signals else None
@@ -206,8 +212,8 @@ def score_streak_win_rates(
         return _empty_win_rates()
     result = pd.DataFrame(rows)
     result = result.reindex(columns=STREAK_WIN_RATE_COLUMNS).sort_values(
-        ["symbol", "direction"],
-        ascending=[True, False],
+        ["symbol", "direction", "streak_days"],
+        ascending=[True, False, True],
     ).reset_index(drop=True)
     return _restore_missing_values(result)
 
@@ -217,7 +223,33 @@ def streak_signal_outcomes(
     min_days: int = 2,
     horizons: tuple[int, ...] = (1, 3, 5, 10),
 ) -> pd.DataFrame:
-    """Return recent confirmed streak ranges and their forward returns."""
+    """Return confirmed streak ranges at or above the selected threshold."""
+    if prices.empty:
+        return _empty_signal_outcomes()
+
+    rows: list[dict[str, object]] = []
+    min_days = max(int(min_days), 1)
+    for symbol, group in prices.groupby("ts_code", sort=False, dropna=False):
+        segment = group.sort_values("trade_date").reset_index(drop=True)
+        closes = segment["close"].astype(float)
+        for streak in _detect_symbol_streaks(str(symbol), segment, min_days, include_index=True):
+            if streak["status"] == "confirmed":
+                rows.append(_streak_outcome_row(segment, closes, streak, horizons))
+
+    if not rows:
+        return _empty_signal_outcomes()
+    result = pd.DataFrame(rows).reindex(columns=STREAK_SIGNAL_OUTCOME_COLUMNS).sort_values(
+        ["end_date", "symbol", "direction"],
+        ascending=[False, True, True],
+    ).reset_index(drop=True)
+    return _restore_missing_values(result)
+
+
+def _exact_streak_signal_outcomes_for_lengths(
+    prices: pd.DataFrame,
+    min_days: int,
+    horizons: tuple[int, ...],
+) -> pd.DataFrame:
     if prices.empty:
         return _empty_signal_outcomes()
 
@@ -229,34 +261,49 @@ def streak_signal_outcomes(
         for streak in _detect_symbol_streaks(str(symbol), segment, min_days, include_index=True):
             if streak["status"] != "confirmed":
                 continue
-            end_index = int(streak["_end_index"])
-            end_close = float(streak["end_price"])
-            row: dict[str, object] = {
-                "symbol": str(symbol),
-                "direction": str(streak["direction"]),
-                "continuity_label": str(streak["continuity_label"]),
-                "start_date": pd.Timestamp(streak["start_date"]),
-                "end_date": pd.Timestamp(streak["end_date"]),
-                "streak_days": int(streak["days"]),
-                "end_close": end_close,
-            }
-            for horizon in horizons:
-                return_column = f"return_{horizon}d"
-                if horizon <= 0 or end_index + horizon >= len(segment):
-                    row[return_column] = None
-                    continue
-                future_close = float(closes.iloc[end_index + horizon])
-                raw_return = (future_close - end_close) / end_close * 100.0 if end_close else 0.0
-                row[return_column] = round(float(raw_return), 2)
-            rows.append(row)
+            start_idx = int(streak["_start_index"])
+            run_length = int(streak["days"])
+            for streak_days in range(min_days, run_length + 1):
+                end_idx = start_idx + streak_days - 1
+                exact_streak = _streak_row(str(symbol), segment, start_idx, end_idx, str(streak["direction"]), "confirmed")
+                exact_streak["_end_index"] = end_idx
+                rows.append(_streak_outcome_row(segment, closes, exact_streak, horizons))
 
     if not rows:
         return _empty_signal_outcomes()
     result = pd.DataFrame(rows).reindex(columns=STREAK_SIGNAL_OUTCOME_COLUMNS).sort_values(
-        ["end_date", "symbol", "direction"],
-        ascending=[False, True, True],
+        ["end_date", "symbol", "direction", "streak_days"],
+        ascending=[False, True, True, True],
     ).reset_index(drop=True)
     return _restore_missing_values(result)
+
+
+def _streak_outcome_row(
+    segment: pd.DataFrame,
+    closes: pd.Series,
+    streak: dict[str, object],
+    horizons: tuple[int, ...],
+) -> dict[str, object]:
+    end_index = int(streak["_end_index"])
+    end_close = float(streak["end_price"])
+    row: dict[str, object] = {
+        "symbol": str(streak["symbol"]),
+        "direction": str(streak["direction"]),
+        "continuity_label": str(streak["continuity_label"]),
+        "start_date": pd.Timestamp(streak["start_date"]),
+        "end_date": pd.Timestamp(streak["end_date"]),
+        "streak_days": int(streak["days"]),
+        "end_close": end_close,
+    }
+    for horizon in horizons:
+        return_column = f"return_{horizon}d"
+        if horizon <= 0 or end_index + horizon >= len(segment):
+            row[return_column] = None
+            continue
+        future_close = float(closes.iloc[end_index + horizon])
+        raw_return = (future_close - end_close) / end_close * 100.0 if end_close else 0.0
+        row[return_column] = round(float(raw_return), 2)
+    return row
 
 
 def _detect_symbol_streaks(
@@ -308,6 +355,7 @@ def _append_streak(
         return
     row = _streak_row(symbol, segment, start_idx, end_idx, direction, status)
     if include_index:
+        row["_start_index"] = start_idx
         row["_end_index"] = end_idx
     rows.append(row)
 
