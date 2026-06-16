@@ -23,7 +23,7 @@ from trend_score.streaks import (
 from trend_score.compare import compare_waves, rank_waves, score_interval_continuity
 from trend_score.data import available_symbol_files, display_name, load_symbol_data
 from trend_score.scoring import score_review_waves, score_waves
-from trend_score.waves import detect_review_waves, detect_waves
+from trend_score.waves import LEVEL_LABELS, detect_review_waves, detect_waves
 
 
 DEFAULT_DATA_DIR = Path("data")
@@ -31,7 +31,16 @@ CONTINUITY_TYPE_INTERVAL = "区间连续性"
 CONTINUITY_TYPE_STREAK = "连阳连阴连续性"
 CONTINUITY_TYPE_OPTIONS = [CONTINUITY_TYPE_INTERVAL, CONTINUITY_TYPE_STREAK]
 DIRECTION_LABELS = {"全部": "全部", "up": "上涨", "down": "下跌"}
-LEVEL_OPTIONS = ["全部", "小", "中", "大", "超大"]
+STREAK_DIRECTION_SUFFIXES = {"up": "连阳", "down": "连阴"}
+PRICE_DISPLAY_COLUMNS = {
+    "start_price",
+    "end_price",
+    "extreme_price",
+    "confirmation_price",
+    "close",
+    "end_close",
+}
+LEVEL_OPTIONS = ["全部", *LEVEL_LABELS]
 GROUP_ORDER = ["index", "sector", "commodity"]
 MIN_WAVE_DAYS = 10
 INTERVAL_ANALYSIS_TAB_LABELS = ["波段评分表", "单个波段详情", "波段对比", "区间横向对比"]
@@ -77,7 +86,6 @@ DISPLAY_COLUMN_LABELS = {
     "longest_direction": "最长方向",
     "longest_days": "最长连续天数",
     "streak_days": "连续天数",
-    "trigger_rule": "触发条件",
     "total_signals": "样本数",
     "latest_start_date": "最近起始时间",
     "latest_end_date": "最近结束时间",
@@ -103,6 +111,7 @@ for _horizon in STREAK_WIN_RATE_HORIZONS:
             f"up_count_{_horizon}d": f"{_horizon}日上涨次数",
             f"down_count_{_horizon}d": f"{_horizon}日下跌次数",
             f"flat_count_{_horizon}d": f"{_horizon}日持平次数",
+            f"win_rate_{_horizon}d": f"{_horizon}日胜率(%)",
             f"up_rate_{_horizon}d": f"{_horizon}日上涨占比(%)",
             f"down_rate_{_horizon}d": f"{_horizon}日下跌占比(%)",
             f"avg_return_{_horizon}d": f"{_horizon}日平均涨跌幅(%)",
@@ -390,7 +399,40 @@ def format_display_dataframe(df: pd.DataFrame, columns: list[str] | None = None)
             display[direction_column] = display[direction_column].map(lambda value: DIRECTION_LABELS.get(value, value))
     if "status" in display:
         display["status"] = display["status"].map(lambda value: STATUS_LABELS.get(value, value))
+    for price_column in PRICE_DISPLAY_COLUMNS.intersection(display.columns):
+        display[price_column] = display[price_column].map(_format_price)
     return display.rename(columns={column: DISPLAY_COLUMN_LABELS.get(column, column) for column in display.columns})
+
+
+def _format_price(value: object) -> object:
+    if pd.isna(value):
+        return value
+    return f"{float(value):.2f}"
+
+
+def _format_win_rate_summary_dataframe(win_rates: pd.DataFrame) -> pd.DataFrame:
+    display = win_rates.copy()
+    display["streak_days"] = display.apply(
+        lambda row: _streak_day_label(row["streak_days"], str(row["direction"])),
+        axis=1,
+    )
+    return display
+
+
+def _streak_day_label(days: object, direction: str) -> str:
+    return f"{_chinese_number(int(days))}{STREAK_DIRECTION_SUFFIXES[direction]}"
+
+
+def _chinese_number(value: int) -> str:
+    digits = "零一二三四五六七八九"
+    if value < 10:
+        return digits[value]
+    if value < 100:
+        tens, ones = divmod(value, 10)
+        prefix = "" if tens == 1 else digits[tens]
+        suffix = "" if ones == 0 else digits[ones]
+        return f"{prefix}十{suffix}"
+    return str(value)
 
 
 def filter_waves_by_continuity(waves: pd.DataFrame, labels: set[str] | None = None) -> pd.DataFrame:
@@ -929,7 +971,7 @@ def _render_streak_win_rates(st, df: pd.DataFrame, min_days: int = 3) -> None:
         st.info("当前品种没有足够的历史样本计算后续涨跌统计。")
         return
     st.dataframe(
-        format_display_dataframe(win_rates, _streak_outcome_summary_columns()),
+        format_display_dataframe(_format_win_rate_summary_dataframe(win_rates), _streak_outcome_summary_columns()),
         use_container_width=True,
         hide_index=True,
     )
@@ -938,7 +980,7 @@ def _render_streak_win_rates(st, df: pd.DataFrame, min_days: int = 3) -> None:
     if signal_outcomes.empty:
         return
     signal_outcomes = signal_outcomes.rename(columns={"start_date": "start_time", "end_date": "end_time"})
-    st.subheader("最近信号明细")
+    st.subheader("信号明细表")
     st.dataframe(
         format_display_dataframe(signal_outcomes.head(50), _streak_signal_detail_columns()),
         use_container_width=True,
@@ -965,23 +1007,17 @@ def _format_dates(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _streak_outcome_summary_columns() -> list[str]:
-    columns = ["trigger_rule", "total_signals", "latest_start_date", "latest_end_date", "latest_streak_days"]
-    for horizon in STREAK_WIN_RATE_HORIZONS:
-        columns.extend(
-            [
-                f"signals_{horizon}d",
-                f"up_count_{horizon}d",
-                f"down_count_{horizon}d",
-                f"flat_count_{horizon}d",
-                f"up_rate_{horizon}d",
-                f"down_rate_{horizon}d",
-                f"avg_return_{horizon}d",
-                f"median_return_{horizon}d",
-                f"best_return_{horizon}d",
-                f"worst_return_{horizon}d",
-            ]
-        )
-    return columns
+    return [
+        "continuity_label",
+        "streak_days",
+        "total_signals",
+        "latest_end_date",
+        "signals_1d",
+        "win_rate_1d",
+        "avg_return_1d",
+        "win_rate_3d",
+        "avg_return_3d",
+    ]
 
 
 def _streak_signal_detail_columns() -> list[str]:
@@ -1056,8 +1092,10 @@ def _wave_label(index: int, wave: pd.Series) -> str:
 
 
 def _wave_compare_label(index: int, wave: pd.Series) -> str:
+    start = pd.Timestamp(wave["start_date"]).strftime("%Y-%m-%d")
+    end = pd.Timestamp(wave["end_date"]).strftime("%Y-%m-%d")
     direction = "上涨" if wave["direction"] == "up" else "下跌"
-    return f"W{index:03d} · {direction} · {wave['level']} · {wave['total_score']:.1f}"
+    return f"{start} -> {end} · {direction} · {wave['level']} · {wave['total_score']:.1f}"
 
 
 if __name__ == "__main__":

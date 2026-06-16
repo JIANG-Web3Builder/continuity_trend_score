@@ -241,16 +241,26 @@ def test_rolling_reversal_thresholds_do_not_change_when_future_prices_are_append
     assert extended_thresholds.tolist() == base_thresholds.tolist()
 
 
-def test_classify_wave_levels_uses_symbol_specific_quantiles():
+def test_classify_wave_levels_uses_fixed_point_buckets():
     waves = pd.DataFrame(
         {
-            "symbol": ["A"] * 5 + ["B"] * 5,
-            "direction": ["up"] * 10,
-            "points": [10, 20, 30, 40, 50, 100, 200, 300, 400, 500],
+            "symbol": ["A"] * 8 + ["B"] * 8,
+            "direction": ["up"] * 16,
+            "points": [299.99, 300, 499.99, 500, 799.99, 800, 999.99, 1000] * 2,
         }
     )
 
     classified = classify_wave_levels(waves)
 
-    assert classified[classified["symbol"] == "A"]["level"].tolist() == ["小", "小", "中", "大", "超大"]
-    assert classified[classified["symbol"] == "B"]["level"].tolist() == ["小", "小", "中", "大", "超大"]
+    expected = [
+        "300点以下",
+        "300-500点",
+        "300-500点",
+        "500-800点",
+        "500-800点",
+        "800-1000点",
+        "800-1000点",
+        "1000点以上",
+    ]
+    assert classified[classified["symbol"] == "A"]["level"].tolist() == expected
+    assert classified[classified["symbol"] == "B"]["level"].tolist() == expected

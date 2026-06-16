@@ -41,7 +41,7 @@ def test_score_waves_rewards_low_drawdown_more_than_choppy_path():
                 "points": 20.0,
                 "pct_change": 20.0,
                 "days": 5,
-                "level": "大",
+                "level": "500-800点",
             },
             {
                 "symbol": "000001.SH",
@@ -53,7 +53,7 @@ def test_score_waves_rewards_low_drawdown_more_than_choppy_path():
                 "points": 20.0,
                 "pct_change": 20.0,
                 "days": 5,
-                "level": "大",
+                "level": "500-800点",
             },
         ]
     )
@@ -106,7 +106,7 @@ def test_score_waves_labels_wave_continuity_from_price_path():
                 "points": 2.0,
                 "pct_change": 1.96,
                 "days": 2,
-                "level": "中",
+                "level": "300-500点",
             },
             {
                 "symbol": "AAA",
@@ -118,7 +118,7 @@ def test_score_waves_labels_wave_continuity_from_price_path():
                 "points": 6.0,
                 "pct_change": 5.88,
                 "days": 5,
-                "level": "中",
+                "level": "300-500点",
             },
             {
                 "symbol": "AAA",
@@ -130,7 +130,7 @@ def test_score_waves_labels_wave_continuity_from_price_path():
                 "points": 2.0,
                 "pct_change": -1.89,
                 "days": 2,
-                "level": "中",
+                "level": "300-500点",
             },
         ]
     )
@@ -154,7 +154,7 @@ def test_score_waves_percentile_scores_are_scoped_to_direction_and_level():
                 "points": 10.0,
                 "pct_change": 10.0,
                 "days": 3,
-                "level": "大",
+                "level": "500-800点",
             },
             {
                 "symbol": "000001.SH",
@@ -166,7 +166,7 @@ def test_score_waves_percentile_scores_are_scoped_to_direction_and_level():
                 "points": 20.0,
                 "pct_change": 20.0,
                 "days": 5,
-                "level": "大",
+                "level": "500-800点",
             },
             {
                 "symbol": "000001.SH",
@@ -178,7 +178,7 @@ def test_score_waves_percentile_scores_are_scoped_to_direction_and_level():
                 "points": 20.0,
                 "pct_change": -16.95,
                 "days": 5,
-                "level": "小",
+                "level": "300点以下",
             },
         ]
     )
@@ -300,7 +300,7 @@ def test_score_review_waves_uses_full_sample_percentiles():
                 "points": 10.0,
                 "pct_change": 10.0,
                 "days": 2,
-                "level": "大",
+                "level": "500-800点",
                 "status": "confirmed",
             },
             {
@@ -313,7 +313,7 @@ def test_score_review_waves_uses_full_sample_percentiles():
                 "points": 20.0,
                 "pct_change": 20.0,
                 "days": 2,
-                "level": "大",
+                "level": "500-800点",
                 "status": "confirmed",
             },
             {
@@ -326,7 +326,7 @@ def test_score_review_waves_uses_full_sample_percentiles():
                 "points": 30.0,
                 "pct_change": 30.0,
                 "days": 2,
-                "level": "大",
+                "level": "500-800点",
                 "status": "confirmed",
             },
         ]
@@ -344,12 +344,12 @@ def test_rank_waves_filters_by_direction_and_level():
         {
             "symbol": ["A", "A", "A"],
             "direction": ["up", "up", "down"],
-            "level": ["大", "小", "大"],
+            "level": ["500-800点", "300点以下", "500-800点"],
             "total_score": [80, 90, 70],
         }
     )
 
-    ranked = rank_waves(scored, direction="up", level="大")
+    ranked = rank_waves(scored, direction="up", level="500-800点")
 
     assert ranked["total_score"].tolist() == [80]
 
@@ -382,7 +382,7 @@ def test_compare_two_waves_returns_metrics_and_normalized_paths():
                 "points": 10.0,
                 "pct_change": 10.0,
                 "days": 3,
-                "level": "中",
+                "level": "300-500点",
                 "total_score": 75.0,
             },
             {
@@ -395,7 +395,7 @@ def test_compare_two_waves_returns_metrics_and_normalized_paths():
                 "points": 5.0,
                 "pct_change": 4.17,
                 "days": 3,
-                "level": "小",
+                "level": "300点以下",
                 "total_score": 65.0,
             },
         ]
@@ -422,7 +422,7 @@ def test_compare_waves_supports_more_than_two_waves():
                 "points": 10.0,
                 "pct_change": 10.0,
                 "days": 3,
-                "level": "大",
+                "level": "500-800点",
                 "total_score": 78.0,
             },
             {
@@ -435,7 +435,7 @@ def test_compare_waves_supports_more_than_two_waves():
                 "points": 12.0,
                 "pct_change": -11.11,
                 "days": 3,
-                "level": "大",
+                "level": "500-800点",
                 "total_score": 81.0,
             },
             {
@@ -448,7 +448,7 @@ def test_compare_waves_supports_more_than_two_waves():
                 "points": 13.0,
                 "pct_change": 13.27,
                 "days": 3,
-                "level": "超大",
+                "level": "1000点以上",
                 "total_score": 85.0,
             },
         ]
